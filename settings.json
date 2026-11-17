@@ -21,13 +21,21 @@
         { "name": "Qoder", "command": "qoder" }
       ]
     },
+    "templatePreset": {
+      "type": "string",
+      "title": "模板预设",
+      "group": "路径模板",
+      "enum": ["Claude Code", "Codex", "纯路径", "自定义"],
+      "default": "Claude Code",
+      "description": "选一个内置模板直接生效；选「自定义」则使用下面的自定义模板。"
+    },
     "pathTemplate": {
       "type": "string",
-      "title": "路径模板",
+      "title": "自定义模板",
       "group": "路径模板",
       "multiline": true,
-      "default": "@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]",
-      "description": "可用占位符：{path} 相对路径；[ONE:...] 选中一行时；[MANY:...] 选中多行时，内含 {start}/{end} 行号。例：Codex 用 @{path}[ONE::{start}][MANY::{start}-{end}]"
+      "default": "",
+      "description": "仅当「模板预设」选「自定义」时生效。占位符：{path} 相对路径；[ONE:...] 选中一行时；[MANY:...] 选中多行时，内含 {start}/{end} 行号。例：@{path}[ONE::{start}][MANY::{start}-{end}]"
     },
     "autoEnter": {
       "type": "boolean",

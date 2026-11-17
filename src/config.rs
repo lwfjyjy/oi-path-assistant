@@ -10,6 +10,18 @@ use serde::Deserialize;
 pub const MAX_AGENTS: usize = 50;
 /// 默认路径模板：Claude Code 的 `@路径#L行` 写法。
 pub const DEFAULT_TEMPLATE: &str = "@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]";
+/// 「模板预设」里代表用户手动填写自定义模板的选项值。
+pub const PRESET_CUSTOM: &str = "自定义";
+
+/// 内置模板预设：(下拉框显示名, 模板内容)。「自定义」不在此表，走下面的文本框。
+pub const PRESETS: &[(&str, &str)] = &[
+    (
+        "Claude Code",
+        "@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]",
+    ),
+    ("Codex", "@{path}[ONE::{start}][MANY::{start}-{end}]"),
+    ("纯路径", "{path}"),
+];
 
 /// 一个可启动的 Agent（`id` 只是运行时用它区分选项，不对外暴露）。
 #[derive(Clone, Debug, PartialEq)]
@@ -91,13 +103,28 @@ pub fn load() -> Config {
                 .collect(),
             None => builtin_agents(),
         };
-    let path_template = host::setting_string("pathTemplate")
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_TEMPLATE.to_owned());
+    // 选了内置预设就直接用它；选「自定义」才读文本框。未知值回落到自定义/默认。
+    let preset = host::setting_string("templatePreset").unwrap_or_else(|| PRESETS[0].0.to_owned());
+    let path_template = if preset != PRESET_CUSTOM {
+        PRESETS
+            .iter()
+            .find(|(name, _)| *name == preset)
+            .map(|(_, t)| (*t).to_owned())
+            .unwrap_or_else(custom_template)
+    } else {
+        custom_template()
+    };
     Config {
         path_template,
         agents,
     }
+}
+
+/// 读「自定义模板」文本框；为空时用默认模板兜底。
+fn custom_template() -> String {
+    host::setting_string("pathTemplate")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_TEMPLATE.to_owned())
 }
 
 #[cfg(test)]

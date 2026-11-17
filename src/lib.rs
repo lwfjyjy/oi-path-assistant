@@ -287,10 +287,7 @@ mod tests {
     #[test]
     fn copy_path_codex_preset() {
         let host = host();
-        host.set_setting(
-            "pathTemplate",
-            &json!("@{path}[ONE::{start}][MANY::{start}-{end}]").to_string(),
-        );
+        host.set_setting("templatePreset", &json!("Codex").to_string());
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
         QuickPath.copy_path(&host.invocation()).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue:5-8"));
