@@ -7,18 +7,55 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "title": "名称", "default": "Claude Code" },
-          "command": { "type": "string", "title": "启动命令", "default": "claude" },
-          "default": { "type": "boolean", "title": "默认", "default": false }
+          "name": {
+            "type": "string",
+            "title": "名称",
+            "default": "Claude Code"
+          },
+          "command": {
+            "type": "string",
+            "title": "启动命令",
+            "default": "claude",
+            "description": "单个可执行程序（可带参数，如 claude --model opus）；不要填 &&、管道等 shell 组合语句。"
+          },
+          "default": {
+            "type": "boolean",
+            "title": "默认",
+            "default": false
+          }
         }
       },
       "default": [
-        { "name": "Claude Code", "command": "claude", "default": true },
-        { "name": "Codex", "command": "codex", "default": false },
-        { "name": "OpenCode", "command": "opencode", "default": false },
-        { "name": "Pi", "command": "pi", "default": false },
-        { "name": "CodeBuddy", "command": "codebuddy", "default": false },
-        { "name": "Qoder", "command": "qoder", "default": false }
+        {
+          "name": "Claude Code",
+          "command": "claude",
+          "default": true
+        },
+        {
+          "name": "Codex",
+          "command": "codex",
+          "default": false
+        },
+        {
+          "name": "OpenCode",
+          "command": "opencode",
+          "default": false
+        },
+        {
+          "name": "Pi",
+          "command": "pi",
+          "default": false
+        },
+        {
+          "name": "CodeBuddy",
+          "command": "codebuddy",
+          "default": false
+        },
+        {
+          "name": "Qoder",
+          "command": "qoder",
+          "default": false
+        }
       ]
     }
   }

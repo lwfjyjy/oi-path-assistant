@@ -47,7 +47,9 @@
 | `project.read` | 读取项目根目录，计算相对路径 |
 | `process:zsh` | 在项目根启动 zsh 终端并执行 Agent 命令（高风险，仅受信任项目可用） |
 
-> 「启动 Agent」的做法是：在项目根开一个 **zsh 登录终端**，再把 Agent 的启动命令敲进去执行（平台无法对用户自定义的任意命令逐个授权，只能固定用 `zsh`）。因此仅支持 zsh、依赖登录 shell 的 PATH，每个插件最多 8 个终端。
+> 「启动 Agent」的做法是：在项目根开一个 **zsh 登录终端**，再用 `exec` 把 Agent 的启动命令**替换掉这个 shell** 执行（平台无法对用户自定义的任意命令逐个授权，只能固定用 `zsh`）。因此仅支持 zsh、依赖登录 shell 的 PATH，每个插件最多 8 个终端。
+>
+> ⚠️ 因为用了 `exec`，Agent 退出后终端会**随之关闭**，不会留下一个可以被自动输入的 shell 提示符。启动命令请填**单个可执行命令**（可带参数，如 `claude --model opus`），不要写 `a && b`、管道等 shell 组合语句。
 
 ## 构建
 
@@ -56,6 +58,15 @@ openidea-plugin build .      # 编译 wasm 并校验清单，产物在 dist/plug
 ```
 
 首次构建会从 GitHub 拉取 `openidea-plugin` SDK（tag `v0.1.45`）。
+
+发布取证的固定输入（可复现构建）：
+
+| 项 | 值 |
+| --- | --- |
+| Rust | `1.100.0`（CI 用 `dtolnay/rust-toolchain@1.100.0` 固定） |
+| 依赖锁 | `Cargo.lock`（已提交，SDK 精确到 commit `c5be2998ec7190567c9da8a6f375aeda4becad2e` = tag `v0.1.45`） |
+| 命令 | `openidea-plugin build .`（内部 `cargo build --release --target wasm32-wasip2`） |
+| 构建环境 | 官方 CLI 0.1.45，`CARGO_HOME` 任意；CI 见 `.github/workflows/build.yml` |
 
 <details>
 <summary>离线开发（内网 / 无网络时）</summary>

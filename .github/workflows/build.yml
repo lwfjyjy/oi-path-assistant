@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 固定工具链与目标，保证 wasm 可复现
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 固定官方 CLI 版本（与 plugin.toml 声明一致）
+      - name: Install openidea-plugin CLI v0.1.45
+        run: cargo install --locked --git https://github.com/l0ng-ai/openidea --tag v0.1.45 ide-host --bin openidea-plugin
+
+      - name: Build plugin (locked)
+        run: openidea-plugin build .
+
+      - name: Record artifact SHA-256
+        run: |
+          ls -l dist/plugin.wasm
+          sha256sum dist/plugin.wasm | tee dist/plugin.wasm.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-wasm
+          path: |
+            dist/plugin.wasm
+            dist/plugin.wasm.sha256

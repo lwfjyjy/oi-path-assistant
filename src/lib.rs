@@ -164,7 +164,13 @@ impl QuickPath {
         }
     }
 
-    /// 在项目根起一个 zsh 登录终端，把 Agent 的启动命令敲进去执行。
+    /// 在项目根起一个 zsh 登录终端，用 `exec` 把 Agent 命令替换掉这个 shell 再执行。
+    ///
+    /// 关键点：不能让登录 shell 在 Agent 退出后继续停在提示符上。否则之后「插入路径」
+    /// 自动回车时，文件名里的 `$(...)`、反引号等会被残留的 shell 当成命令执行。
+    /// 用 `exec` 后，shell 自身变成 Agent 进程：Agent 一旦退出终端即关闭，不存在
+    /// 「Agent 已退出但 shell 还在」的中间态；`|| exit` 保证命令启动失败时直接关终端，
+    /// 而不是退回到一个可被自动输入的 shell。
     fn start_agent(&self, agent: Agent) -> Result<Option<String>, Error> {
         let seq = host::storage::get(KEY_TERM_SEQ)
             .ok()
@@ -174,7 +180,10 @@ impl QuickPath {
             + 1;
         let key = format!("agent-{seq}");
         host::open_terminal_session(&key, &agent.name, &Command::new("zsh").arg("-l"))?;
-        host::write_terminal(&key, &format!("{TERM_CMD_DONE}{}\n", agent.command))?;
+        host::write_terminal(
+            &key,
+            &format!("{TERM_CMD_DONE}exec {} || exit\n", agent.command),
+        )?;
         host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
         host::storage::set(KEY_LAST_TERMINAL, &key)?;
         let _ = host::set_context(CTX_HAS_TERMINAL, true);
@@ -342,7 +351,7 @@ mod tests {
         QuickPath.launch_default().unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
-        assert!(writes[0].1.ends_with("claude\n"));
+        assert!(writes[0].1.ends_with("exec claude || exit\n"));
         // 先吐 OSC 133;D，让 IDE 不再把常驻终端当成“命令运行中”而转圈
         assert!(writes[0].1.contains("133;D"));
         // 最近终端 key 已记录，供「插入路径」复用
@@ -365,7 +374,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .1
-                .ends_with("codex\n")
+                .ends_with("exec codex || exit\n")
         );
     }
 
@@ -387,7 +396,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .1
-                .ends_with("codex\n")
+                .ends_with("exec codex || exit\n")
         );
     }
 
@@ -442,6 +451,36 @@ mod tests {
             host.notifications()
                 .iter()
                 .any(|n| n.level == NotificationLevel::Warning && n.body == HINT_CONTROL_CHARS)
+        );
+    }
+
+    /// 回归：Agent 退出后终端关闭，插入一个「不含控制字符、但含命令替换」的文件名
+    /// 也不应被任何 shell 自动执行（旧实现会让残留的 zsh 提示符执行 `$(...)`）。
+    #[test]
+    fn insert_after_agent_exit_does_not_reach_shell() {
+        let host = host();
+        single_agent(&host);
+        host.set_setting("autoEnter", "true");
+        host.open_editor(
+            "/proj/note$(printf OI_SHELL_SUBSTITUTION_PROBE).rs",
+            "rust",
+            VUE,
+            &[],
+        );
+        let mut plugin = QuickPath;
+        plugin.launch_default().unwrap();
+        // Agent 退出 = 终端关闭（因为启动时用 exec 替换了 shell）
+        let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
+        let event = host.finish_terminal(&key).unwrap();
+        plugin.handle_events(&[event], &host.invocation());
+        let before = host.terminal_writes().len();
+        plugin.insert_path(&host.invocation()).unwrap();
+        // 不向任何残留终端写入内容，并给出提示
+        assert_eq!(host.terminal_writes().len(), before);
+        assert!(
+            host.notifications()
+                .iter()
+                .any(|n| n.level == NotificationLevel::Warning)
         );
     }
 
