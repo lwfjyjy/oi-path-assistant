@@ -48,7 +48,8 @@ impl Plugin for QuickPath {
         match id {
             "copy-path" => self.copy_path(ctx),
             "insert-path" => self.insert_path(ctx),
-            "launch-agent" => self.launch_agent(ctx),
+            "launch-agent" => self.launch_default(),
+            "pick-agent" => self.launch_pick(),
             other => Err(Error::NotFound(format!("command {other}"))),
         }
     }
@@ -108,33 +109,45 @@ impl QuickPath {
         Ok(None)
     }
 
-    /// 启动：只有一个 Agent 时直接启动，多个时弹出选择，一个都没有时友好提示。
-    fn launch_agent(&self, _ctx: &Invocation) -> Result<Option<String>, Error> {
-        let cfg = config::load();
-        if cfg.agents.is_empty() {
+    /// 左键启动：直接启动「默认」Agent（设置里勾选的那个），不弹框。
+    fn launch_default(&self) -> Result<Option<String>, Error> {
+        match config::load().default_agent().cloned() {
+            Some(agent) => self.start_or_warn(agent),
+            None => {
+                notify(
+                    NotificationLevel::Warning,
+                    "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。",
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// 右键选择启动：弹出列表，选哪个启动哪个。
+    fn launch_pick(&self) -> Result<Option<String>, Error> {
+        let agents = config::load().agents;
+        if agents.is_empty() {
             notify(
                 NotificationLevel::Warning,
                 "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。",
             );
             return Ok(None);
         }
-        let agent = if cfg.agents.len() == 1 {
-            cfg.agents[0].clone()
-        } else {
-            let items: Vec<PickItem> = cfg
-                .agents
-                .iter()
-                .map(|a| PickItem::new(&a.id, &a.name))
-                .collect();
-            let Some(id) = host::pick("选择一个 Agent 启动", &items)? else {
-                return Ok(None);
-            };
-            match cfg.agents.into_iter().find(|a| a.id == id) {
-                Some(a) => a,
-                None => return Ok(None),
-            }
+        let items: Vec<PickItem> = agents
+            .iter()
+            .map(|a| PickItem::new(&a.id, &a.name))
+            .collect();
+        let Some(id) = host::pick("选择一个 Agent 启动", &items)? else {
+            return Ok(None);
         };
-        // 启动失败（如项目未受信任）给出可读提示，而不是把裸错误抛给界面。
+        match agents.into_iter().find(|a| a.id == id) {
+            Some(agent) => self.start_or_warn(agent),
+            None => Ok(None),
+        }
+    }
+
+    /// 启动失败（如项目未受信任）给出可读提示，而不是把裸错误抛给界面。
+    fn start_or_warn(&self, agent: Agent) -> Result<Option<String>, Error> {
         match self.start_agent(agent) {
             Ok(out) => Ok(out),
             Err(e) => {
@@ -253,7 +266,7 @@ mod tests {
     fn single_agent(h: &MockHost) {
         h.set_setting(
             "agents",
-            &json!([{ "name": "Claude Code", "command": "claude" }]).to_string(),
+            &json!([{ "name": "Claude Code", "command": "claude", "default": true }]).to_string(),
         );
         h.set_setting("pathTemplate", &json!(config::DEFAULT_TEMPLATE).to_string());
     }
@@ -305,7 +318,7 @@ mod tests {
     fn launch_single_agent_writes_command() {
         let host = host();
         single_agent(&host);
-        QuickPath.launch_agent(&host.invocation()).unwrap();
+        QuickPath.launch_default().unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].1, "claude\n");
@@ -315,12 +328,28 @@ mod tests {
     }
 
     #[test]
-    fn launch_multiple_agents_picks_one() {
+    fn launch_pick_selects_agent() {
         let host = host();
         // 默认六个 Agent，Codex 在下标 1；选择项 key 就是下标。
         host.answer_next_prompt(Some(&["1"]));
-        QuickPath.launch_agent(&host.invocation()).unwrap();
+        QuickPath.launch_pick().unwrap();
         // 选中的是 Codex，验证敲进去的是 codex 命令
+        assert_eq!(host.terminal_writes().last().unwrap().1, "codex\n");
+    }
+
+    #[test]
+    fn launch_default_uses_marked_agent() {
+        let host = host();
+        // 把「默认」勾在第二项 Codex 上，左键启动应直接跑 codex。
+        host.set_setting(
+            "agents",
+            &json!([
+                { "name": "Claude Code", "command": "claude", "default": false },
+                { "name": "Codex", "command": "codex", "default": true }
+            ])
+            .to_string(),
+        );
+        QuickPath.launch_default().unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "codex\n");
     }
 
@@ -328,7 +357,7 @@ mod tests {
     fn launch_without_agents_notifies_and_starts_nothing() {
         let host = host();
         host.set_setting("agents", "[]");
-        QuickPath.launch_agent(&host.invocation()).unwrap();
+        QuickPath.launch_default().unwrap();
         assert!(host.terminal_writes().is_empty());
         assert_eq!(host.notifications().len(), 1);
     }
@@ -338,7 +367,7 @@ mod tests {
         let host = host();
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.launch_agent(&host.invocation()).unwrap();
+        QuickPath.launch_default().unwrap();
         QuickPath.insert_path(&host.invocation()).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5");
         assert!(host.clipboard().is_none());
@@ -350,7 +379,7 @@ mod tests {
         single_agent(&host);
         host.set_setting("autoEnter", "true");
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.launch_agent(&host.invocation()).unwrap();
+        QuickPath.launch_default().unwrap();
         QuickPath.insert_path(&host.invocation()).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5\n");
     }
@@ -373,7 +402,7 @@ mod tests {
         let host = host();
         single_agent(&host);
         let mut plugin = QuickPath;
-        plugin.launch_agent(&host.invocation()).unwrap();
+        plugin.launch_default().unwrap();
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
         let event = host.finish_terminal(&key).unwrap();
         plugin.handle_events(&[event], &host.invocation());

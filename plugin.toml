@@ -11,6 +11,7 @@ wasm = "dist/plugin.wasm"
 
 activation = [
   "on-command:launch-agent",
+  "on-command:pick-agent",
   "on-command:copy-path",
   "on-command:insert-path",
   "on-event:terminal-exited",
@@ -24,6 +25,11 @@ id = "launch-agent"
 title = "启动 Agent"
 category = "Quick Path"
 icon = "icons/launch.svg"
+
+[[contributes.commands]]
+id = "pick-agent"
+title = "选择 Agent 启动…"
+category = "Quick Path"
 
 [[contributes.commands]]
 id = "copy-path"
@@ -49,6 +55,10 @@ command = "copy-path"
 menu = "mainToolbar"
 command = "insert-path"
 when = "plugin.lwf.quick-path.hasTerminal"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "pick-agent"
 
 [[contributes.menus]]
 menu = "editor.context"

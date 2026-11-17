@@ -27,6 +27,8 @@ pub struct Agent {
     pub id: String,
     pub name: String,
     pub command: String,
+    /// 是否为「默认启动」的那个；正常只有一项为 true。
+    pub is_default: bool,
 }
 
 /// 整份配置：一份路径模板 + 一组 Agent。
@@ -36,13 +38,25 @@ pub struct Config {
     pub agents: Vec<Agent>,
 }
 
-/// 设置表格里的一行（只有名称与启动命令两列）。
+impl Config {
+    /// 取默认 Agent：勾了「默认」的第一项；都没勾就退回第一项。
+    pub fn default_agent(&self) -> Option<&Agent> {
+        self.agents
+            .iter()
+            .find(|a| a.is_default)
+            .or_else(|| self.agents.first())
+    }
+}
+
+/// 设置表格里的一行（名称 / 启动命令 / 是否默认）。
 #[derive(Deserialize)]
 struct Row {
     #[serde(default)]
     name: String,
     #[serde(default)]
     command: String,
+    #[serde(rename = "default", default)]
+    is_default: bool,
 }
 
 /// 内置默认 Agent：六个常见 CLI。
@@ -61,6 +75,7 @@ fn builtin_agents() -> Vec<Agent> {
         id: i.to_string(),
         name: (*name).to_owned(),
         command: (*command).to_owned(),
+        is_default: i == 0,
     })
     .collect()
 }
@@ -78,7 +93,7 @@ impl Default for Config {
 /// 从 IDE 设置读取配置；缺失时用内置默认值。
 pub fn load() -> Config {
     // 设置里的 `agents` 是对象数组；解析失败或键不存在都回落到内置默认。
-    let agents =
+    let mut agents =
         match host::setting("agents").and_then(|s| serde_json::from_str::<Vec<Row>>(&s).ok()) {
             Some(rows) => rows
                 .into_iter()
@@ -90,6 +105,7 @@ pub fn load() -> Config {
                         id: String::new(),
                         name: name.to_owned(),
                         command: command.to_owned(),
+                        is_default: r.is_default,
                     })
                 })
                 .take(MAX_AGENTS)
@@ -101,6 +117,19 @@ pub fn load() -> Config {
                 .collect(),
             None => builtin_agents(),
         };
+    // 「默认」只能有一个：都没勾就选第一项，勾了多个就只认第一个勾的。
+    match agents.iter().position(|a| a.is_default) {
+        Some(keep) => {
+            for (i, a) in agents.iter_mut().enumerate() {
+                a.is_default = i == keep;
+            }
+        }
+        None => {
+            if let Some(first) = agents.first_mut() {
+                first.is_default = true;
+            }
+        }
+    }
     // 以「自定义模板」文本框为准：填了就用它；留空才用上面的「模板预设」下拉。
     let path_template = match custom_template() {
         Some(t) => t,

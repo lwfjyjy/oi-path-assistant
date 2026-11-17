@@ -3,21 +3,22 @@
     "agents": {
       "type": "array",
       "title": "Agent 列表",
-      "description": "每行一个 Agent；可增删、拖动排序。第一列是显示名称，第二列是启动命令。",
+      "description": "每行一个 Agent；可增删、拖动排序。「默认」勾选的那一项是左键直接启动的 Agent（只能有一项，多勾以上面第一个为准）。",
       "items": {
         "type": "object",
         "properties": {
           "name": { "type": "string", "title": "名称", "default": "Claude Code" },
-          "command": { "type": "string", "title": "启动命令", "default": "claude" }
+          "command": { "type": "string", "title": "启动命令", "default": "claude" },
+          "default": { "type": "boolean", "title": "默认", "default": false }
         }
       },
       "default": [
-        { "name": "Claude Code", "command": "claude" },
-        { "name": "Codex", "command": "codex" },
-        { "name": "OpenCode", "command": "opencode" },
-        { "name": "Pi", "command": "pi" },
-        { "name": "CodeBuddy", "command": "codebuddy" },
-        { "name": "Qoder", "command": "qoder" }
+        { "name": "Claude Code", "command": "claude", "default": true },
+        { "name": "Codex", "command": "codex", "default": false },
+        { "name": "OpenCode", "command": "opencode", "default": false },
+        { "name": "Pi", "command": "pi", "default": false },
+        { "name": "CodeBuddy", "command": "codebuddy", "default": false },
+        { "name": "Qoder", "command": "qoder", "default": false }
       ]
     }
   }
