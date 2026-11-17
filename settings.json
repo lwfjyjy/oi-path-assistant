@@ -25,9 +25,9 @@
       "type": "string",
       "title": "模板预设",
       "group": "路径模板",
-      "enum": ["Claude Code", "Codex", "纯路径", "自定义"],
+      "enum": ["Claude Code", "Codex", "纯路径"],
       "default": "Claude Code",
-      "description": "选一个内置模板直接生效；选「自定义」则使用下面的自定义模板。"
+      "description": "当下面的「自定义模板」留空时，按这个预设生成路径。"
     },
     "pathTemplate": {
       "type": "string",
@@ -35,7 +35,7 @@
       "group": "路径模板",
       "multiline": true,
       "default": "",
-      "description": "仅当「模板预设」选「自定义」时生效。占位符：{path} 相对路径；[ONE:...] 选中一行时；[MANY:...] 选中多行时，内含 {start}/{end} 行号。例：@{path}[ONE::{start}][MANY::{start}-{end}]"
+      "description": "填了就以它为准（覆盖上面的预设）；留空则用上面的模板预设。占位符：{path} 相对路径；[ONE:...] 选中一行时；[MANY:...] 选中多行时，内含 {start}/{end} 行号。"
     },
     "autoEnter": {
       "type": "boolean",
