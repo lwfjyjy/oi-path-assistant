@@ -1,0 +1,76 @@
+id = "lwf.quick-path"
+name = "Quick Path 路径助手"
+version = "0.1.0"
+description = "把当前文件与选中行拼成 AI agent 可识别的路径引用，一键拷贝或插入终端。"
+authors = ["lwf"]
+license = "MIT"
+categories = ["tools", "ai"]
+engines.openidea = "^1.4"
+
+wasm = "dist/plugin.wasm"
+
+activation = [
+  "on-command:launch-agent",
+  "on-command:copy-path",
+  "on-command:insert-path",
+  "on-command:open-config",
+  "on-view:config",
+  "on-event:terminal-exited",
+]
+
+[capabilities]
+required = ["editor.read", "clipboard", "storage", "project.read", "process:zsh"]
+
+[[contributes.commands]]
+id = "launch-agent"
+title = "启动 Agent"
+category = "Quick Path"
+icon = "icons/launch.svg"
+
+[[contributes.commands]]
+id = "copy-path"
+title = "拷贝路径"
+category = "Quick Path"
+icon = "icons/copy.svg"
+
+[[contributes.commands]]
+id = "insert-path"
+title = "插入路径"
+category = "Quick Path"
+icon = "icons/insert.svg"
+
+[[contributes.commands]]
+id = "open-config"
+title = "打开路径助手设置"
+category = "Quick Path"
+
+[[contributes.menus]]
+menu = "mainToolbar"
+command = "launch-agent"
+
+[[contributes.menus]]
+menu = "mainToolbar"
+command = "copy-path"
+
+[[contributes.menus]]
+menu = "mainToolbar"
+command = "insert-path"
+when = "plugin.lwf.quick-path.hasTerminal"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "copy-path"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "insert-path"
+when = "plugin.lwf.quick-path.hasTerminal"
+
+[[contributes.views]]
+id = "config"
+title = "Quick Path 路径助手"
+location = "right"
+
+[contributes.settings]
+title = "Quick Path"
+schema = "settings.schema.json"
