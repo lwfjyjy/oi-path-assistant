@@ -6,8 +6,6 @@
 mod config;
 mod template;
 
-use std::path::{Component, Path};
-
 use openidea_plugin::host::{self, Command};
 use openidea_plugin::{
     Context, Error, Event, EventKind, Invocation, NotificationLevel, PickItem, Plugin,
@@ -21,6 +19,17 @@ use template::{render, selection_lines};
 const KEY_LAST_TERMINAL: &str = "lastTerminalKey";
 /// storage 中记录终端序号计数器的键（保证跨会话 key 不重复）。
 const KEY_TERM_SEQ: &str = "terminalSeq";
+/// 上下文键：当前是否有可写入的 Agent 终端（控制「插入路径」是否显示）。
+const CTX_HAS_TERMINAL: &str = "hasTerminal";
+
+/// 还没有配置任何 Agent 时的统一提示。
+const HINT_NO_AGENTS: &str = "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。";
+
+/// 让 IDE 不再把常驻终端当成「命令在跑」的 OSC 133;D 标记（shell 集成的「命令结束」）。
+///
+/// 插件开的常驻终端会被 IDE 当成「有命令一直在跑」而一直转圈；先吐这个标记后，
+/// IDE 认为命令已结束就不再转圈——只影响那个转圈图标，终端照常可用。
+const TERM_CMD_DONE: &str = r"printf '\033]133;D\033\\'; ";
 
 /// 插件本体（无状态：配置每次从 IDE 设置读取）。
 #[derive(Default)]
@@ -35,7 +44,7 @@ impl Plugin for QuickPath {
             .ok()
             .flatten()
             .is_some();
-        let _ = host::set_context("hasTerminal", has);
+        let _ = host::set_context(CTX_HAS_TERMINAL, has);
         Ok(())
     }
 
@@ -75,7 +84,7 @@ impl QuickPath {
             return Ok(None);
         };
         host::copy_to_clipboard(&text)?;
-        if host::setting_bool("notifyOnCopy").unwrap_or(true) {
+        if config::notify_on_copy() {
             notify(NotificationLevel::Info, &format!("已复制：{text}"));
         }
         Ok(None)
@@ -86,21 +95,18 @@ impl QuickPath {
         let Some(text) = self.current_ref(ctx) else {
             return Ok(None);
         };
-        let Some(key) = host::storage::get(KEY_LAST_TERMINAL)
-            .ok()
-            .flatten()
-            .filter(|k| !k.is_empty())
-        else {
+        let Some(key) = last_terminal() else {
             notify(
                 NotificationLevel::Warning,
                 "还没有启动过 Agent 终端，请先点「启动 Agent」。",
             );
             return Ok(None);
         };
-        let mut payload = text;
-        if host::setting_bool("autoEnter").unwrap_or(false) {
-            payload.push('\n');
-        }
+        let payload = if config::auto_enter() {
+            format!("{text}\n")
+        } else {
+            text
+        };
         if host::write_terminal(&key, &payload).is_err() {
             // 终端已被关闭：清理状态，让「插入路径」重新隐藏。
             clear_last_terminal();
@@ -111,13 +117,10 @@ impl QuickPath {
 
     /// 左键启动：直接启动「默认」Agent（设置里勾选的那个），不弹框。
     fn launch_default(&self) -> Result<Option<String>, Error> {
-        match config::load().default_agent().cloned() {
+        match config::default_agent() {
             Some(agent) => self.start_or_warn(agent),
             None => {
-                notify(
-                    NotificationLevel::Warning,
-                    "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。",
-                );
+                notify(NotificationLevel::Warning, HINT_NO_AGENTS);
                 Ok(None)
             }
         }
@@ -125,22 +128,22 @@ impl QuickPath {
 
     /// 右键选择启动：弹出列表，选哪个启动哪个。
     fn launch_pick(&self) -> Result<Option<String>, Error> {
-        let agents = config::load().agents;
+        let agents = config::agents();
         if agents.is_empty() {
-            notify(
-                NotificationLevel::Warning,
-                "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。",
-            );
+            notify(NotificationLevel::Warning, HINT_NO_AGENTS);
             return Ok(None);
         }
+        // 选项 key 直接用下标，选完按同样下标取回 Agent。
         let items: Vec<PickItem> = agents
             .iter()
-            .map(|a| PickItem::new(&a.id, &a.name))
+            .enumerate()
+            .map(|(i, a)| PickItem::new(&i.to_string(), &a.name))
             .collect();
-        let Some(id) = host::pick("选择一个 Agent 启动", &items)? else {
+        let Some(index) = host::pick("选择一个 Agent 启动", &items)?.and_then(|k| k.parse().ok())
+        else {
             return Ok(None);
         };
-        match agents.into_iter().find(|a| a.id == id) {
+        match agents.into_iter().nth(index) {
             Some(agent) => self.start_or_warn(agent),
             None => Ok(None),
         }
@@ -158,10 +161,6 @@ impl QuickPath {
     }
 
     /// 在项目根起一个 zsh 登录终端，把 Agent 的启动命令敲进去执行。
-    ///
-    /// 开头先 `printf` 一段 OSC 133;D（shell 集成里「命令结束」的标记）：
-    /// 插件开的常驻终端会被 IDE 当成「有命令一直在跑」而一直转圈，吐这个标记后
-    /// IDE 认为已结束就不再转圈——只影响那个转圈图标，终端照常可用。
     fn start_agent(&self, agent: Agent) -> Result<Option<String>, Error> {
         let seq = host::storage::get(KEY_TERM_SEQ)
             .ok()
@@ -171,11 +170,10 @@ impl QuickPath {
             + 1;
         let key = format!("agent-{seq}");
         host::open_terminal_session(&key, &agent.name, &Command::new("zsh").arg("-l"))?;
-        const CMD_DONE: &str = r"printf '\033]133;D\033\\'; ";
-        host::write_terminal(&key, &format!("{CMD_DONE}{}\n", agent.command))?;
+        host::write_terminal(&key, &format!("{TERM_CMD_DONE}{}\n", agent.command))?;
         host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
         host::storage::set(KEY_LAST_TERMINAL, &key)?;
-        let _ = host::set_context("hasTerminal", true);
+        let _ = host::set_context(CTX_HAS_TERMINAL, true);
         Ok(None)
     }
 
@@ -208,26 +206,37 @@ impl QuickPath {
             .and_then(|r| {
                 selection_lines(r.start.line, r.start.character, r.end.line, r.end.character)
             });
-        let cfg = config::load();
         Some(render(
-            &cfg.path_template,
+            &config::template(),
             &relative_path(&root, &path),
             sel,
         ))
     }
 }
 
-/// 把 AI 相对路径算成「以 / 分隔、无 ./、无前导 /」的形式。
+/// 取「最近一次启动的终端 key」；没有或为空时返回 `None`。
+fn last_terminal() -> Option<String> {
+    host::storage::get(KEY_LAST_TERMINAL)
+        .ok()
+        .flatten()
+        .filter(|k| !k.is_empty())
+}
+
+/// 把绝对路径算成「以 / 分隔、无 ./、无前导 /」的项目相对路径。
+///
+/// 这里用字符串而非 `std::path`：插件编译成 wasm，`Path` 会按 unix 语义解析，
+/// 在 Windows 的 `\` 路径上会失效；先把 `\` 统一成 `/` 即可跨平台正确。
 fn relative_path(root: &str, path: &str) -> String {
-    let rel = Path::new(path)
+    let root = root.replace('\\', "/");
+    let root = root.trim_end_matches('/');
+    let path = path.replace('\\', "/");
+    // 只有落在项目根「之下」（或正好等于根）才做相对化，避免 /proj 误配 /proj2。
+    let rel = path
         .strip_prefix(root)
-        .unwrap_or(Path::new(path));
-    rel.components()
-        .filter_map(|c| match c {
-            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
-            Component::ParentDir => Some("..".to_owned()),
-            _ => None,
-        })
+        .filter(|r| r.is_empty() || r.starts_with('/'))
+        .unwrap_or(&path);
+    rel.split('/')
+        .filter(|s| !s.is_empty() && *s != ".")
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -235,7 +244,7 @@ fn relative_path(root: &str, path: &str) -> String {
 /// 终端关闭时清掉「最近终端」状态，并让插入按钮重新隐藏。
 fn clear_last_terminal() {
     let _ = host::storage::delete(KEY_LAST_TERMINAL);
-    let _ = host::set_context("hasTerminal", false);
+    let _ = host::set_context(CTX_HAS_TERMINAL, false);
 }
 
 /// 统一的用户提示。
@@ -331,7 +340,10 @@ mod tests {
         assert!(writes[0].1.contains("133;D"));
         // 最近终端 key 已记录，供「插入路径」复用
         assert_eq!(host.storage().get(KEY_LAST_TERMINAL), Some(&writes[0].0));
-        assert_eq!(host.context_keys().get("hasTerminal"), Some(&true.into()));
+        assert_eq!(
+            host.context_keys().get(CTX_HAS_TERMINAL),
+            Some(&true.into())
+        );
     }
 
     #[test]
@@ -426,6 +438,25 @@ mod tests {
         let event = host.finish_terminal(&key).unwrap();
         plugin.handle_events(&[event], &host.invocation());
         assert!(!host.storage().contains_key(KEY_LAST_TERMINAL));
-        assert_eq!(host.context_keys().get("hasTerminal"), Some(&false.into()));
+        assert_eq!(
+            host.context_keys().get(CTX_HAS_TERMINAL),
+            Some(&false.into())
+        );
+    }
+
+    #[test]
+    fn relative_path_normalizes_separators() {
+        assert_eq!(relative_path("/proj", "/proj/src/A.vue"), "src/A.vue");
+        // 根带尾斜杠也能正确相对化
+        assert_eq!(relative_path("/proj/", "/proj/src/A.vue"), "src/A.vue");
+        // 相同前缀但不是子目录，不能误配
+        assert_eq!(relative_path("/proj", "/proj2/x"), "proj2/x");
+        // Windows 风格反斜杠
+        assert_eq!(
+            relative_path(r"C:\proj", r"C:\proj\src\A.java"),
+            "src/A.java"
+        );
+        // 折叠 ./ 与多余分隔符
+        assert_eq!(relative_path("/proj", "/proj/./a//b.rs"), "a/b.rs");
     }
 }

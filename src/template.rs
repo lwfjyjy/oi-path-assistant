@@ -47,6 +47,7 @@ pub fn selection_lines(
 }
 
 /// 渲染模板：先处理条件段，再替换占位符。
+#[must_use]
 pub fn render(template: &str, path: &str, sel: Option<LineSel>) -> String {
     let body = expand(template, sel);
     let (start, end) = match sel {

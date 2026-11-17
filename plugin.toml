@@ -30,6 +30,7 @@ icon = "icons/launch.svg"
 id = "pick-agent"
 title = "选择 Agent 启动…"
 category = "Quick Path"
+icon = "icons/pick.svg"
 
 [[contributes.commands]]
 id = "copy-path"
@@ -58,6 +59,15 @@ when = "plugin.lwf.quick-path.hasTerminal"
 
 [[contributes.menus]]
 menu = "editor.context"
+command = "copy-path"
+
+[[contributes.menus]]
+menu = "editor.context"
+command = "insert-path"
+when = "plugin.lwf.quick-path.hasTerminal"
+
+[[contributes.menus]]
+menu = "editor.context"
 command = "pick-agent"
 
 [[contributes.menus]]
@@ -67,15 +77,6 @@ command = "pick-agent"
 [[contributes.menus]]
 menu = "tools"
 command = "pick-agent"
-
-[[contributes.menus]]
-menu = "editor.context"
-command = "copy-path"
-
-[[contributes.menus]]
-menu = "editor.context"
-command = "insert-path"
-when = "plugin.lwf.quick-path.hasTerminal"
 
 [contributes.settings]
 title = "Quick Path"

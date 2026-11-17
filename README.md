@@ -24,14 +24,14 @@
 
 | 占位 / 段 | 含义 |
 | --- | --- |
-| `{path}` | 项目相对路径，统一 `/` 分隔、不带 `./` |
+| `{path}` | 项目相对路径，统一 `/` 分隔、不带 `./`（Windows 的 `\` 会自动归一为 `/`） |
 | `{start}` / `{end}` | 1 基行号 |
 | `[ONE: …]` | 恰好选中 1 行时输出，否则整段消失 |
 | `[MANY: …]` | 选中多行时输出，否则整段消失 |
 
 不选任何行时，`ONE` / `MANY` 段都不输出，只剩纯路径。结束列为 0（整行选择）时结束行自动减 1，避免多算一行。
 
-常见模板（可直接填进设置页的「路径模板」）：
+常见模板（可直接填进设置页的「自定义模板」）：
 
 - Claude Code：`@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]`
 - Codex：`@{path}[ONE::{start}][MANY::{start}-{end}]`
@@ -80,12 +80,13 @@ openidea-plugin build .
 
 ```
 quick-path/
-├─ plugin.toml            # 插件清单（命令 / 菜单 / 设置 / 权限）
-├─ settings.json          # 原生设置页：Agent 表格 / 路径模板 / 开关
-├─ icons/                 # 3 个工具栏命令图标
+├─ plugin.toml            # 插件清单（命令 / 菜单 / 设置页 / 权限）
+├─ settings-agents.json   # 设置页「Agent 列表」的结构与默认值
+├─ settings-template.json # 设置页「路径模板」的结构与默认值
+├─ icons/                 # 4 个命令图标（启动 / 拷贝 / 插入 / 选择）
 ├─ src/
-│  ├─ lib.rs              # 插件入口：命令分发、终端事件
-│  ├─ config.rs           # 从 IDE 设置读取 Agent 与模板
+│  ├─ lib.rs              # 插件入口：命令分发、终端事件、路径换算
+│  ├─ config.rs           # 从 IDE 设置读取 Agent 与模板（含内置默认）
 │  └─ template.rs         # 路径模板纯函数渲染
 └─ .scratch/quick-path/spec.md  # 需求规格
 ```
