@@ -63,6 +63,11 @@ when = "plugin.lwf.quick-path.hasTerminal"
 title = "Quick Path"
 
 [[contributes.settings.pages]]
-id = "main"
-title = "Agent 与路径模板"
-schema = "settings.json"
+id = "agents"
+title = "Agent 列表"
+schema = "settings-agents.json"
+
+[[contributes.settings.pages]]
+id = "template"
+title = "路径模板"
+schema = "settings-template.json"
