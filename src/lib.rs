@@ -158,6 +158,10 @@ impl QuickPath {
     }
 
     /// 在项目根起一个 zsh 登录终端，把 Agent 的启动命令敲进去执行。
+    ///
+    /// 开头先 `printf` 一段 OSC 133;D（shell 集成里「命令结束」的标记）：
+    /// 插件开的常驻终端会被 IDE 当成「有命令一直在跑」而一直转圈，吐这个标记后
+    /// IDE 认为已结束就不再转圈——只影响那个转圈图标，终端照常可用。
     fn start_agent(&self, agent: Agent) -> Result<Option<String>, Error> {
         let seq = host::storage::get(KEY_TERM_SEQ)
             .ok()
@@ -167,7 +171,8 @@ impl QuickPath {
             + 1;
         let key = format!("agent-{seq}");
         host::open_terminal_session(&key, &agent.name, &Command::new("zsh").arg("-l"))?;
-        host::write_terminal(&key, &format!("{}\n", agent.command))?;
+        const CMD_DONE: &str = r"printf '\033]133;D\033\\'; ";
+        host::write_terminal(&key, &format!("{CMD_DONE}{}\n", agent.command))?;
         host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
         host::storage::set(KEY_LAST_TERMINAL, &key)?;
         let _ = host::set_context("hasTerminal", true);
@@ -321,7 +326,9 @@ mod tests {
         QuickPath.launch_default().unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
-        assert_eq!(writes[0].1, "claude\n");
+        assert!(writes[0].1.ends_with("claude\n"));
+        // 先吐 OSC 133;D，让 IDE 不再把常驻终端当成“命令运行中”而转圈
+        assert!(writes[0].1.contains("133;D"));
         // 最近终端 key 已记录，供「插入路径」复用
         assert_eq!(host.storage().get(KEY_LAST_TERMINAL), Some(&writes[0].0));
         assert_eq!(host.context_keys().get("hasTerminal"), Some(&true.into()));
@@ -334,7 +341,13 @@ mod tests {
         host.answer_next_prompt(Some(&["1"]));
         QuickPath.launch_pick().unwrap();
         // 选中的是 Codex，验证敲进去的是 codex 命令
-        assert_eq!(host.terminal_writes().last().unwrap().1, "codex\n");
+        assert!(
+            host.terminal_writes()
+                .last()
+                .unwrap()
+                .1
+                .ends_with("codex\n")
+        );
     }
 
     #[test]
@@ -350,7 +363,13 @@ mod tests {
             .to_string(),
         );
         QuickPath.launch_default().unwrap();
-        assert_eq!(host.terminal_writes().last().unwrap().1, "codex\n");
+        assert!(
+            host.terminal_writes()
+                .last()
+                .unwrap()
+                .1
+                .ends_with("codex\n")
+        );
     }
 
     #[test]
