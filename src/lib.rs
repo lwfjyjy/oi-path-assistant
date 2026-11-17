@@ -1,7 +1,7 @@
 //! Quick Path 路径助手：插件入口。
 //!
-//! 负责命令分发（启动 / 拷贝 / 插入）、`terminal-exited` 事件处理，以及工具窗口 `Views` 的消息处理。
-//! 具体逻辑拆到两个模块：`config`（数据与读写）、`template`（纯函数渲染）。
+//! 负责命令分发（启动 / 拷贝 / 插入）与 `terminal-exited` 事件处理。
+//! 具体逻辑拆到两个模块：`config`（读取 IDE 设置）、`template`（纯函数渲染）。
 
 mod config;
 mod template;
@@ -9,26 +9,20 @@ mod template;
 use std::path::{Component, Path};
 
 use openidea_plugin::host::{self, Command};
-use openidea_plugin::views::{Body, View, ViewEvent, Viewport, Views};
 use openidea_plugin::{
     Context, Error, Event, EventKind, Invocation, NotificationLevel, PickItem, Plugin,
     register_plugin,
 };
-use serde_json::{Value, json};
 
-use config::{Agent, Config};
+use config::Agent;
 use template::{render, selection_lines};
 
-/// 工具窗口（配置面板）的 view id，需与 `plugin.toml` 一致。
-const VIEW: &str = "config";
-/// 内嵌的配置面板页面。
-const PAGE: &str = include_str!("config_page.html");
 /// storage 中记录「最近一次启动的终端 key」的键。
 const KEY_LAST_TERMINAL: &str = "lastTerminalKey";
 /// storage 中记录终端序号计数器的键（保证跨会话 key 不重复）。
 const KEY_TERM_SEQ: &str = "terminalSeq";
 
-/// 插件本体（无状态：配置每次从 storage 读取）。
+/// 插件本体（无状态：配置每次从 IDE 设置读取）。
 #[derive(Default)]
 pub struct QuickPath;
 
@@ -55,10 +49,6 @@ impl Plugin for QuickPath {
             "copy-path" => self.copy_path(ctx),
             "insert-path" => self.insert_path(ctx),
             "launch-agent" => self.launch_agent(ctx),
-            "open-config" => {
-                host::reveal_view(VIEW)?;
-                Ok(None)
-            }
             other => Err(Error::NotFound(format!("command {other}"))),
         }
     }
@@ -209,61 +199,6 @@ impl QuickPath {
     }
 }
 
-impl Views for QuickPath {
-    fn render(
-        &mut self,
-        _view: &str,
-        _viewport: Option<Viewport>,
-        _ctx: &Invocation,
-    ) -> Result<View, Error> {
-        let state = json!({
-            "config": config::load(),
-            "maxSvg": config::MAX_SVG,
-            "presets": config::PRESETS.iter().map(|p| json!({
-                "id": p.id, "name": p.name, "template": p.template
-            })).collect::<Vec<_>>(),
-        });
-        let text = serde_json::to_string(&state).map_err(|e| Error::Failed(e.to_string()))?;
-        // 注入前把 `<` 转义，避免配置里的 SVG 提前闭合 <script>。
-        Ok(View::new(Body::Html(PAGE.replacen(
-            r#""__START__""#,
-            &text.replace('<', "\\u003c"),
-            1,
-        ))))
-    }
-
-    fn handle(&mut self, _view: &str, event: ViewEvent, _ctx: &Invocation) -> Result<(), Error> {
-        let ViewEvent::Message(raw) = event else {
-            return Ok(());
-        };
-        let reply = match parse_save(&raw) {
-            Ok(cfg) => match config::save(&cfg) {
-                Ok(()) => {
-                    notify(NotificationLevel::Info, "配置已保存");
-                    json!({ "type": "saved", "config": cfg })
-                }
-                Err(e) => json!({ "type": "error", "message": e.to_string() }),
-            },
-            Err(message) => json!({ "type": "error", "message": message }),
-        };
-        host::post_view_message(VIEW, &reply.to_string())
-    }
-}
-
-/// 解析面板发来的保存消息并校验；错误信息直接回给面板展示。
-fn parse_save(raw: &str) -> Result<Config, String> {
-    let value: Value = serde_json::from_str(raw).map_err(|e| format!("消息格式错误：{e}"))?;
-    if value.get("type").and_then(Value::as_str) != Some("save") {
-        return Err("未知操作".to_owned());
-    }
-    let data = value.get("config").cloned().ok_or("缺少配置数据")?;
-    let mut cfg: Config =
-        serde_json::from_value(data).map_err(|e| format!("配置格式不正确：{e}"))?;
-    cfg.normalize();
-    cfg.validate()?;
-    Ok(cfg)
-}
-
 /// 把 AI 相对路径算成「以 / 分隔、无 ./、无前导 /」的形式。
 fn relative_path(root: &str, path: &str) -> String {
     let rel = Path::new(path)
@@ -290,12 +225,13 @@ fn notify(level: NotificationLevel, body: &str) {
     host::notify(level, "Quick Path", body);
 }
 
-register_plugin!(QuickPath, views);
+register_plugin!(QuickPath);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use openidea_plugin::mock::MockHost;
+    use serde_json::json;
 
     const CAPS: &[&str] = &[
         "editor.read",
@@ -313,16 +249,13 @@ mod tests {
         host
     }
 
-    /// 只放一个 Claude Agent 的配置（直接启动、不弹选择）。
-    fn single_agent() {
-        let cfg = json!({
-            "version": 1,
-            "pathTemplate": "@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]",
-            "presetId": "claude",
-            "agents": [{ "id": "claude", "name": "Claude Code", "command": "claude",
-                         "icon": { "type": "builtin", "key": "claude" } }]
-        });
-        host::storage::set(config::STORAGE_KEY, &cfg.to_string()).unwrap();
+    /// 只放一个 Claude Agent（直接启动、不弹选择）。
+    fn single_agent(h: &MockHost) {
+        h.set_setting(
+            "agents",
+            &json!([{ "name": "Claude Code", "command": "claude" }]).to_string(),
+        );
+        h.set_setting("pathTemplate", &json!(config::DEFAULT_TEMPLATE).to_string());
     }
 
     #[test]
@@ -354,14 +287,10 @@ mod tests {
     #[test]
     fn copy_path_codex_preset() {
         let host = host();
-        let cfg = json!({
-            "version": 1,
-            "pathTemplate": "@{path}[ONE::{start}][MANY::{start}-{end}]",
-            "presetId": "codex",
-            "agents": [{ "id": "codex", "name": "Codex", "command": "codex",
-                         "icon": { "type": "builtin", "key": "codex" } }]
-        });
-        host::storage::set(config::STORAGE_KEY, &cfg.to_string()).unwrap();
+        host.set_setting(
+            "pathTemplate",
+            &json!("@{path}[ONE::{start}][MANY::{start}-{end}]").to_string(),
+        );
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
         QuickPath.copy_path(&host.invocation()).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue:5-8"));
@@ -378,7 +307,7 @@ mod tests {
     #[test]
     fn launch_single_agent_writes_command() {
         let host = host();
-        single_agent();
+        single_agent(&host);
         QuickPath.launch_agent(&host.invocation()).unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
@@ -391,7 +320,8 @@ mod tests {
     #[test]
     fn launch_multiple_agents_picks_one() {
         let host = host();
-        host.answer_next_prompt(Some(&["codex"]));
+        // 默认六个 Agent，Codex 在下标 1；选择项 key 就是下标。
+        host.answer_next_prompt(Some(&["1"]));
         QuickPath.launch_agent(&host.invocation()).unwrap();
         // 选中的是 Codex，验证敲进去的是 codex 命令
         assert_eq!(host.terminal_writes().last().unwrap().1, "codex\n");
@@ -400,9 +330,7 @@ mod tests {
     #[test]
     fn launch_without_agents_notifies_and_starts_nothing() {
         let host = host();
-        let cfg =
-            json!({ "version": 1, "pathTemplate": "{path}", "presetId": "path", "agents": [] });
-        host::storage::set(config::STORAGE_KEY, &cfg.to_string()).unwrap();
+        host.set_setting("agents", "[]");
         QuickPath.launch_agent(&host.invocation()).unwrap();
         assert!(host.terminal_writes().is_empty());
         assert_eq!(host.notifications().len(), 1);
@@ -411,7 +339,7 @@ mod tests {
     #[test]
     fn insert_writes_terminal_and_skips_clipboard() {
         let host = host();
-        single_agent();
+        single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
         QuickPath.launch_agent(&host.invocation()).unwrap();
         QuickPath.insert_path(&host.invocation()).unwrap();
@@ -422,7 +350,7 @@ mod tests {
     #[test]
     fn insert_auto_enter_appends_newline() {
         let host = host();
-        single_agent();
+        single_agent(&host);
         host.set_setting("autoEnter", "true");
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
         QuickPath.launch_agent(&host.invocation()).unwrap();
@@ -446,7 +374,7 @@ mod tests {
     #[test]
     fn terminal_exit_hides_insert_context() {
         let host = host();
-        single_agent();
+        single_agent(&host);
         let mut plugin = QuickPath;
         plugin.launch_agent(&host.invocation()).unwrap();
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
@@ -454,50 +382,5 @@ mod tests {
         plugin.handle_events(&[event], &host.invocation());
         assert!(!host.storage().contains_key(KEY_LAST_TERMINAL));
         assert_eq!(host.context_keys().get("hasTerminal"), Some(&false.into()));
-    }
-
-    #[test]
-    fn view_renders_html_with_state() {
-        let host = host();
-        let mut plugin = QuickPath;
-        let view = plugin.render(VIEW, None, &host.invocation()).unwrap();
-        match view.body {
-            Body::Html(html) => {
-                assert!(html.contains("\"agents\""));
-                assert!(html.contains("Claude Code"));
-            }
-            other => panic!("expected html body, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn view_save_persists_config() {
-        let host = host();
-        let mut plugin = QuickPath;
-        let payload = json!({
-            "type": "save",
-            "config": {
-                "version": 1,
-                "pathTemplate": "{path}",
-                "presetId": "path",
-                "agents": [{ "id": "x", "name": "X", "command": "x", "icon": { "type": "builtin", "key": "pi" } }]
-            }
-        });
-        plugin
-            .handle(
-                VIEW,
-                ViewEvent::Message(payload.to_string()),
-                &host.invocation(),
-            )
-            .unwrap();
-        let saved: Config =
-            serde_json::from_str(host.storage().get(config::STORAGE_KEY).unwrap()).unwrap();
-        assert_eq!(saved.agents.len(), 1);
-        assert_eq!(saved.path_template, "{path}");
-        assert!(
-            host.view_messages()
-                .iter()
-                .any(|(v, m)| v == VIEW && m.contains("saved"))
-        );
     }
 }

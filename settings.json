@@ -1,0 +1,47 @@
+{
+  "properties": {
+    "agents": {
+      "type": "array",
+      "title": "Agent 列表",
+      "group": "Agent 列表",
+      "description": "每行一个 Agent；可增删、拖动排序。第一列是显示名称，第二列是启动命令。",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "title": "名称", "default": "Claude Code" },
+          "command": { "type": "string", "title": "启动命令", "default": "claude" }
+        }
+      },
+      "default": [
+        { "name": "Claude Code", "command": "claude" },
+        { "name": "Codex", "command": "codex" },
+        { "name": "OpenCode", "command": "opencode" },
+        { "name": "Pi", "command": "pi" },
+        { "name": "CodeBuddy", "command": "codebuddy" },
+        { "name": "Qoder", "command": "qoder" }
+      ]
+    },
+    "pathTemplate": {
+      "type": "string",
+      "title": "路径模板",
+      "group": "路径模板",
+      "multiline": true,
+      "default": "@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]",
+      "description": "可用占位符：{path} 相对路径；[ONE:...] 选中一行时；[MANY:...] 选中多行时，内含 {start}/{end} 行号。例：Codex 用 @{path}[ONE::{start}][MANY::{start}-{end}]"
+    },
+    "autoEnter": {
+      "type": "boolean",
+      "title": "插入后自动回车",
+      "group": "选项",
+      "default": false,
+      "description": "插入路径到终端后自动按回车执行。"
+    },
+    "notifyOnCopy": {
+      "type": "boolean",
+      "title": "拷贝后显示提示",
+      "group": "选项",
+      "default": true,
+      "description": "拷贝路径到剪贴板后弹出提示。"
+    }
+  }
+}

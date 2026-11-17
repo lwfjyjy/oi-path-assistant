@@ -13,8 +13,6 @@ activation = [
   "on-command:launch-agent",
   "on-command:copy-path",
   "on-command:insert-path",
-  "on-command:open-config",
-  "on-view:config",
   "on-event:terminal-exited",
 ]
 
@@ -39,11 +37,6 @@ title = "插入路径"
 category = "Quick Path"
 icon = "icons/insert.svg"
 
-[[contributes.commands]]
-id = "open-config"
-title = "打开路径助手设置"
-category = "Quick Path"
-
 [[contributes.menus]]
 menu = "mainToolbar"
 command = "launch-agent"
@@ -66,11 +59,10 @@ menu = "editor.context"
 command = "insert-path"
 when = "plugin.lwf.quick-path.hasTerminal"
 
-[[contributes.views]]
-id = "config"
-title = "Quick Path 路径助手"
-location = "right"
-
 [contributes.settings]
 title = "Quick Path"
-schema = "settings.schema.json"
+
+[[contributes.settings.pages]]
+id = "main"
+title = "Agent 与路径模板"
+schema = "settings.json"

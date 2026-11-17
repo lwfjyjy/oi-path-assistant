@@ -6,8 +6,8 @@
 
 - **顶部工具栏 3 个图标**：启动 Agent、拷贝路径、插入路径。
 - **编辑器右键菜单**：拷贝路径、插入路径（与工具栏同逻辑）。
-- **路径模板**：`{path}` 相对路径、`{start}`/`{end}` 行号、`[ONE: …]` 单行段、`[MANY: …]` 多行段；支持 Claude Code / Codex / 纯路径一键预设。
-- **Agent 管理面板**（右侧工具窗口）：新增 / 编辑 / 删除 / 拖拽排序 Agent，内置 6 个品牌图标，也可上传自己的 SVG。
+- **路径模板**：`{path}` 相对路径、`{start}`/`{end}` 行号、`[ONE: …]` 单行段、`[MANY: …]` 多行段；文档里给了 Claude Code / Codex / 纯路径三种现成模板。
+- **原生设置页管理 Agent**（设置 › Quick Path）：在设置页的表格里增删、排序、直接编辑 Agent 的名称与启动命令，内置 6 个常见 Agent。
 - **插入路径**不经过剪贴板，直接写进「最近一次启动」的 Agent 终端；默认不自动回车，可在设置里开启。
 - 未启动过 Agent 终端时，自动隐藏「插入路径」按钮（通过 `when` 上下文控制）。
 
@@ -16,7 +16,7 @@
 1. 打开任意项目文件。
 2. 点「启动 Agent」（只配置了一个就直接启动；多个会弹列表让你选；一个都没有会提示去设置里添加）。
 3. 选中若干行（或什么都不选），点「拷贝路径」把引用拷到剪贴板，或点「插入路径」直接塞进 Agent 终端。
-4. 在 **设置 › Quick Path** 调整两个开关；在右侧的 **Quick Path 路径助手** 面板管理 Agent 和路径模板。
+4. 打开 **设置 › Quick Path**：在「Agent 与路径模板」页里增删 / 排序 Agent、修改路径模板、开关自动回车与拷贝提示。
 
 ## 路径模板语法
 
@@ -29,7 +29,7 @@
 
 不选任何行时，`ONE` / `MANY` 段都不输出，只剩纯路径。结束列为 0（整行选择）时结束行自动减 1，避免多算一行。
 
-内置预设：
+常见模板（可直接填进设置页的「路径模板」）：
 
 - Claude Code：`@{path}[ONE:#L{start}][MANY:#L{start}-L{end}]`
 - Codex：`@{path}[ONE::{start}][MANY::{start}-{end}]`
@@ -41,7 +41,7 @@
 | --- | --- |
 | `editor.read` | 读取当前文件与选区行号 |
 | `clipboard` | 把引用写入剪贴板 |
-| `storage` | 保存 Agent 配置 |
+| `storage` | 保存运行状态（最近一次启动的终端 key） |
 | `project.read` | 读取项目根目录，计算相对路径 |
 | `process:zsh` | 在项目根启动 zsh 终端并执行 Agent 命令（高风险，仅受信任项目可用） |
 
@@ -78,13 +78,12 @@ openidea-plugin build .
 
 ```
 quick-path/
-├─ plugin.toml            # 插件清单（命令 / 菜单 / 视图 / 设置 / 权限）
-├─ settings.schema.json   # 原生设置页（autoEnter、notifyOnCopy）
+├─ plugin.toml            # 插件清单（命令 / 菜单 / 设置 / 权限）
+├─ settings.json          # 原生设置页：Agent 表格 / 路径模板 / 开关
 ├─ icons/                 # 3 个工具栏命令图标
 ├─ src/
-│  ├─ lib.rs              # 插件入口：命令分发、事件、工具窗口
-│  ├─ config.rs           # 配置模型、预设、读写、SVG 净化
-│  ├─ template.rs         # 路径模板纯函数渲染
-│  └─ config_page.html    # 工具窗口面板（原生 JS）
+│  ├─ lib.rs              # 插件入口：命令分发、终端事件
+│  ├─ config.rs           # 从 IDE 设置读取 Agent 与模板
+│  └─ template.rs         # 路径模板纯函数渲染
 └─ .scratch/quick-path/spec.md  # 需求规格
 ```
