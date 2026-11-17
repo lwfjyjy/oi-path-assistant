@@ -60,7 +60,7 @@ pub struct Agent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    #[serde(default = "one")]
+    #[serde(default = "default_version")]
     pub version: u32,
     #[serde(default = "default_template")]
     pub path_template: String,
@@ -70,7 +70,7 @@ pub struct Config {
     pub agents: Vec<Agent>,
 }
 
-fn one() -> u32 {
+fn default_version() -> u32 {
     1
 }
 fn default_template() -> String {

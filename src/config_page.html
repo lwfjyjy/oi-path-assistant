@@ -53,6 +53,7 @@
   }
   .btn.primary { color: var(--openidea-fg-on-accent); background: var(--openidea-accent); border-color: var(--openidea-accent); }
   .btn:hover { filter: brightness(1.05); }
+  .btn:disabled { opacity: 0.6; cursor: default; filter: none; }
   .agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .agent {
     display: flex; align-items: center; gap: 9px; padding: 7px 8px;
@@ -60,7 +61,8 @@
     background: var(--openidea-bg);
   }
   .agent:hover { background: var(--openidea-bg-hover, transparent); }
-  .logo { width: 26px; height: 26px; border-radius: 6px; object-fit: contain; background: var(--openidea-bg-elevated, transparent); flex: none; }
+  .logo { width: 26px; height: 26px; border-radius: 6px; background: var(--openidea-bg-elevated, transparent); flex: none; display: flex; align-items: center; justify-content: center; color: var(--openidea-fg); overflow: hidden; }
+  .logo img, .logo svg { width: 100%; height: 100%; display: block; object-fit: contain; }
   .meta { flex: 1 1 auto; min-width: 0; }
   .nm { color: var(--openidea-fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cm { color: var(--openidea-fg-muted); font-family: var(--openidea-font-mono, monospace); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -84,7 +86,8 @@
   .icons { display: flex; flex-wrap: wrap; gap: 6px; }
   .sw { width: 34px; height: 34px; padding: 3px; border-radius: 7px; cursor: pointer; background: var(--openidea-bg); border: 1px solid var(--openidea-border); }
   .sw.active { border-color: var(--openidea-accent); outline: 1px solid var(--openidea-accent); }
-  .sw img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .sw-in { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--openidea-fg); }
+  .sw-in img, .sw-in svg { width: 100%; height: 100%; object-fit: contain; display: block; }
   .upload { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: var(--openidea-link, var(--openidea-accent)); text-decoration: underline; }
   .err { color: var(--openidea-danger); font-size: 12px; margin: 0; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
@@ -138,20 +141,22 @@
     // 由插件替换成起始状态（一个 JSON 对象）；保持字符串形式，格式化工具不会破坏它。
     const START = "__START__";
     const $ = (id) => document.getElementById(id);
-    const svg = (bg, ch) =>
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="${bg}"/><text x="12" y="16.5" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#ffffff">${ch}</text></svg>`;
-    const BUILTIN = {
-      claude: svg("#D97757", "C"),
-      codex: svg("#10A37F", "X"),
-      opencode: svg("#3B82F6", "O"),
-      pi: svg("#8B5CF6", "π"),
-      codebuddy: svg("#14B8A6", "B"),
-      qoder: svg("#6366F1", "Q"),
+    // 内置图标统一用 currentColor 描边，随主题明暗自适应；每个品牌一个可辨识的线性图形。
+    const GLYPH = {
+      claude: '<path d="M12 4v16M5 8l14 8M19 8L5 16"/>',
+      codex: '<path d="M5 7l5 5-5 5M12 17h7"/>',
+      opencode: '<path d="M9 5c-2 0-2 2-2 3s0 3-2 3c2 0 2 2 2 3s0 3 2 3M15 5c2 0 2 2 2 3s0 3 2 3c-2 0-2 2-2 3s0 3-2 3"/>',
+      pi: '<path d="M5 8h14M8 8v9M16 8v9"/>',
+      codebuddy: '<path d="M4 6h16v10H9l-4 4v-4H4z"/>',
+      qoder: '<circle cx="11" cy="11" r="6"/><path d="M15 15l4 4"/>',
     };
-    const KEYS = Object.keys(BUILTIN);
+    const KEYS = Object.keys(GLYPH);
+    const glyphSvg = (key) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${GLYPH[key] || GLYPH.qoder}</svg>`;
 
     const state = {
       config: (START && START.config) || { version: 1, pathTemplate: "{path}", presetId: "claude", agents: [] },
+      maxSvg: (START && START.maxSvg) || 16384,
       presets: (START && START.presets) || [],
     };
 
@@ -159,10 +164,20 @@
     const dlg = $("dlg"), fName = $("f-name"), fCmd = $("f-cmd"), fIcons = $("f-icons"), dlgErr = $("dlg-err");
     let editing = -1, pickIcon = null, dragFrom = -1;
 
-    const iconUrl = (icon) => {
-      const data = icon && icon.type === "svg" ? icon.data : BUILTIN[icon && icon.key] || BUILTIN.qoder;
-      return "data:image/svg+xml;utf8," + encodeURIComponent(data || "");
-    };
+    // 生成图标元素：自定义 SVG 用 <img>（内容已由 Rust 侧净化），内置图标用内联 <svg>（跟随主题色）。
+    function iconEl(icon, cls) {
+      const box = document.createElement("span");
+      box.className = cls || "logo";
+      if (icon && icon.type === "svg" && icon.data) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = "data:image/svg+xml;utf8," + encodeURIComponent(icon.data);
+        box.appendChild(img);
+      } else {
+        box.innerHTML = glyphSvg(icon && icon.key);
+      }
+      return box;
+    }
 
     function toast(msg, ok = true) {
       statusEl.textContent = msg;
@@ -191,8 +206,7 @@
         const li = document.createElement("li");
         li.className = "agent";
         li.draggable = true;
-        const img = document.createElement("img");
-        img.className = "logo"; img.alt = ""; img.src = iconUrl(a.icon);
+        const logo = iconEl(a.icon);
         const meta = document.createElement("div"); meta.className = "meta";
         const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = a.name || "(未命名)";
         const cm = document.createElement("div"); cm.className = "cm"; cm.textContent = a.command || "";
@@ -203,7 +217,7 @@
         const del = document.createElement("button"); del.className = "iconbtn danger"; del.title = "删除"; del.textContent = "🗑";
         del.onclick = () => { state.config.agents.splice(i, 1); renderAgents(); };
         ops.append(edit, del);
-        li.append(img, meta, ops);
+        li.append(logo, meta, ops);
         li.ondragstart = (e) => { dragFrom = i; e.dataTransfer.effectAllowed = "move"; };
         li.ondragover = (e) => e.preventDefault();
         li.ondrop = (e) => {
@@ -225,16 +239,14 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "sw" + (pickIcon && pickIcon.type === "builtin" && pickIcon.key === k ? " active" : "");
-        const im = document.createElement("img"); im.src = iconUrl({ type: "builtin", key: k });
-        b.appendChild(im);
+        b.appendChild(iconEl({ type: "builtin", key: k }, "sw-in"));
         b.onclick = () => { pickIcon = { type: "builtin", key: k }; renderIconPicker(); };
         fIcons.appendChild(b);
       });
       if (pickIcon && pickIcon.type === "svg") {
         const b = document.createElement("button");
         b.type = "button"; b.className = "sw active"; b.title = "自定义 SVG";
-        const im = document.createElement("img"); im.src = iconUrl(pickIcon);
-        b.appendChild(im);
+        b.appendChild(iconEl(pickIcon, "sw-in"));
         fIcons.appendChild(b);
       }
     }
@@ -256,7 +268,8 @@
     $("f-file").onchange = async (e) => {
       const f = e.target.files && e.target.files[0];
       if (!f) return;
-      if (f.size > 16 * 1024) { dlgErr.textContent = "SVG 超过 16 KiB"; dlgErr.hidden = false; return; }
+      const max = state.maxSvg || 16384;
+      if (f.size > max) { dlgErr.textContent = `SVG 超过 ${Math.round(max / 1024)} KiB`; dlgErr.hidden = false; return; }
       const text = await f.text();
       if (!/^\s*<svg/i.test(text)) { dlgErr.textContent = "请选择以 <svg 开头的文件"; dlgErr.hidden = false; return; }
       pickIcon = { type: "svg", data: text };
@@ -274,9 +287,13 @@
       renderAgents();
     };
 
-    $("save").onclick = () => {
+    const saveBtn = $("save");
+    // 保存往返期间禁用按钮，避免重复提交。
+    const setSaving = (on) => { saveBtn.disabled = on; saveBtn.textContent = on ? "保存中…" : "保存"; };
+    saveBtn.onclick = () => {
       state.config.pathTemplate = tpl.value;
       state.config.version = 1;
+      setSaving(true);
       openidea.postMessage(JSON.stringify({ type: "save", config: state.config }));
     };
     tpl.addEventListener("input", renderPresets);
@@ -284,6 +301,7 @@
     openidea.onMessage((raw) => {
       let m;
       try { m = JSON.parse(raw); } catch { return; }
+      setSaving(false);
       if (m.type === "saved") {
         if (m.config) { state.config = m.config; tpl.value = m.config.pathTemplate || ""; renderAgents(); }
         toast("已保存");

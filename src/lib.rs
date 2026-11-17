@@ -71,8 +71,7 @@ impl Plugin for QuickPath {
             };
             let last = host::storage::get(KEY_LAST_TERMINAL).ok().flatten();
             if last.as_deref() == Some(exited.key.as_str()) {
-                let _ = host::storage::delete(KEY_LAST_TERMINAL);
-                let _ = host::set_context("hasTerminal", false);
+                clear_last_terminal();
             }
         }
     }
@@ -113,8 +112,7 @@ impl QuickPath {
         }
         if host::write_terminal(&key, &payload).is_err() {
             // 终端已被关闭：清理状态，让「插入路径」重新隐藏。
-            let _ = host::storage::delete(KEY_LAST_TERMINAL);
-            let _ = host::set_context("hasTerminal", false);
+            clear_last_terminal();
             notify(NotificationLevel::Warning, "Agent 终端已关闭，请重新启动。");
         }
         Ok(None)
@@ -220,6 +218,7 @@ impl Views for QuickPath {
     ) -> Result<View, Error> {
         let state = json!({
             "config": config::load(),
+            "maxSvg": config::MAX_SVG,
             "presets": config::PRESETS.iter().map(|p| json!({
                 "id": p.id, "name": p.name, "template": p.template
             })).collect::<Vec<_>>(),
@@ -278,6 +277,12 @@ fn relative_path(root: &str, path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// 终端关闭时清掉「最近终端」状态，并让插入按钮重新隐藏。
+fn clear_last_terminal() {
+    let _ = host::storage::delete(KEY_LAST_TERMINAL);
+    let _ = host::set_context("hasTerminal", false);
 }
 
 /// 统一的用户提示。
