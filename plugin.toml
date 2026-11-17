@@ -1,5 +1,5 @@
-id = "lwf.quick-path"
-name = "Quick Path 路径助手"
+id = "lwf.oi-path-assistant"
+name = "oi-path-assistant"
 version = "0.1.0"
 description = "把当前文件与选中行拼成 AI agent 可识别的路径引用，一键拷贝或插入终端。"
 authors = ["lwf"]
@@ -23,25 +23,25 @@ required = ["editor.read", "clipboard", "storage", "project.read", "process:zsh"
 [[contributes.commands]]
 id = "launch-agent"
 title = "启动 Agent"
-category = "Quick Path"
+category = "oi-path-assistant"
 icon = "icons/launch.svg"
 
 [[contributes.commands]]
 id = "pick-agent"
 title = "选择 Agent 启动…"
-category = "Quick Path"
+category = "oi-path-assistant"
 icon = "icons/pick.svg"
 
 [[contributes.commands]]
 id = "copy-path"
 title = "拷贝路径"
-category = "Quick Path"
+category = "oi-path-assistant"
 icon = "icons/copy.svg"
 
 [[contributes.commands]]
 id = "insert-path"
 title = "插入路径"
-category = "Quick Path"
+category = "oi-path-assistant"
 icon = "icons/insert.svg"
 
 [[contributes.menus]]
@@ -55,7 +55,7 @@ command = "copy-path"
 [[contributes.menus]]
 menu = "mainToolbar"
 command = "insert-path"
-when = "plugin.lwf.quick-path.hasTerminal"
+when = "plugin.lwf.oi-path-assistant.hasTerminal"
 
 [[contributes.menus]]
 menu = "editor.context"
@@ -64,7 +64,7 @@ command = "copy-path"
 [[contributes.menus]]
 menu = "editor.context"
 command = "insert-path"
-when = "plugin.lwf.quick-path.hasTerminal"
+when = "plugin.lwf.oi-path-assistant.hasTerminal"
 
 [[contributes.menus]]
 menu = "editor.context"
@@ -79,7 +79,7 @@ menu = "tools"
 command = "pick-agent"
 
 [contributes.settings]
-title = "Quick Path"
+title = "oi-path-assistant"
 
 [[contributes.settings.pages]]
 id = "agents"

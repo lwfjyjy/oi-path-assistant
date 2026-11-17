@@ -1,6 +1,6 @@
 //! 配置数据：Agent 列表与路径模板。
 //!
-//! 配置由 IDE 原生「设置 › Quick Path」提供（见 `plugin.toml` 的 `contributes.settings.pages`），
+//! 配置由 IDE 原生「设置 › oi-path-assistant」提供（见 `plugin.toml` 的 `contributes.settings.pages`），
 //! 插件只读取、不写入；读取失败或从未配置时回落到内置默认。
 
 use openidea_plugin::host;

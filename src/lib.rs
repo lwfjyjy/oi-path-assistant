@@ -1,4 +1,4 @@
-//! Quick Path 路径助手：插件入口。
+//! oi-path-assistant 路径助手：插件入口。
 //!
 //! 负责命令分发（启动 / 拷贝 / 插入）与 `terminal-exited` 事件处理。
 //! 具体逻辑拆到两个模块：`config`（读取 IDE 设置）、`template`（纯函数渲染）。
@@ -23,7 +23,7 @@ const KEY_TERM_SEQ: &str = "terminalSeq";
 const CTX_HAS_TERMINAL: &str = "hasTerminal";
 
 /// 还没有配置任何 Agent 时的统一提示。
-const HINT_NO_AGENTS: &str = "还没有配置任何 Agent。请在「设置 › Quick Path」中添加。";
+const HINT_NO_AGENTS: &str = "还没有配置任何 Agent。请在「设置 › oi-path-assistant」中添加。";
 
 /// 让 IDE 不再把常驻终端当成「命令在跑」的 OSC 133;D 标记（shell 集成的「命令结束」）。
 ///
@@ -249,7 +249,7 @@ fn clear_last_terminal() {
 
 /// 统一的用户提示。
 fn notify(level: NotificationLevel, body: &str) {
-    host::notify(level, "Quick Path", body);
+    host::notify(level, "oi-path-assistant", body);
 }
 
 register_plugin!(QuickPath);

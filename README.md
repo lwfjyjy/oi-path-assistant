@@ -1,4 +1,4 @@
-# Quick Path 路径助手
+# oi-path-assistant 路径助手
 
 在 OpenIDEA 里和 AI Agent（Claude Code、Codex、OpenCode 等）对话时，一键把「当前文件的相对路径 + 选中行号」拼成对应 Agent 的引用格式，**拷贝到剪贴板**或**直接敲进正在运行的 Agent 终端**，再也不用记 `#L5-L9` / `:5-9` 这些格式。
 
@@ -7,7 +7,7 @@
 - **顶部工具栏 3 个图标**：启动 Agent、拷贝路径、插入路径。
 - **编辑器右键菜单**：选择 Agent 启动…（弹出列表选一个）、拷贝路径、插入路径。
 - **路径模板**：`{path}` 相对路径、`{start}`/`{end}` 行号、`[ONE: …]` 单行段、`[MANY: …]` 多行段；文档里给了 Claude Code / Codex / 纯路径三种现成模板。
-- **原生设置页管理 Agent**（设置 › Quick Path）：分「Agent 列表」和「路径模板」两页；Agent 表格可增删、排序、编辑名称与启动命令，并用「默认」列勾选左键直接启动的那个，内置 6 个常见 Agent。
+- **原生设置页管理 Agent**（设置 › oi-path-assistant）：分「Agent 列表」和「路径模板」两页；Agent 表格可增删、排序、编辑名称与启动命令，并用「默认」列勾选左键直接启动的那个，内置 6 个常见 Agent。
 - **插入路径**不经过剪贴板，直接写进「最近一次启动」的 Agent 终端；默认不自动回车，可在设置里开启。
 - 未启动过 Agent 终端时，自动隐藏「插入路径」按钮（通过 `when` 上下文控制）。
 
@@ -16,7 +16,7 @@
 1. 打开任意项目文件。
 2. 左键点「启动 Agent」：直接启动设置里勾了「默认」的那个；想临时换一个，就在编辑器里右键 →「选择 Agent 启动…」弹列表选；一个都没配置会提示去设置里添加。
 3. 选中若干行（或什么都不选），点「拷贝路径」把引用拷到剪贴板，或点「插入路径」直接塞进 Agent 终端。
-4. 打开 **设置 › Quick Path**：「Agent 列表」页管理 Agent 并勾选默认；「路径模板」页改模板、开关自动回车与拷贝提示。
+4. 打开 **设置 › oi-path-assistant**：「Agent 列表」页管理 Agent 并勾选默认；「路径模板」页改模板、开关自动回车与拷贝提示。
 
 ## 路径模板语法
 
@@ -79,7 +79,7 @@ openidea-plugin build .
 ## 目录结构
 
 ```
-quick-path/
+oi-path-assistant/
 ├─ plugin.toml            # 插件清单（命令 / 菜单 / 设置页 / 权限）
 ├─ settings-agents.json   # 设置页「Agent 列表」的结构与默认值
 ├─ settings-template.json # 设置页「路径模板」的结构与默认值
@@ -88,5 +88,5 @@ quick-path/
 │  ├─ lib.rs              # 插件入口：命令分发、终端事件、路径换算
 │  ├─ config.rs           # 从 IDE 设置读取 Agent 与模板（含内置默认）
 │  └─ template.rs         # 路径模板纯函数渲染
-└─ .scratch/quick-path/spec.md  # 需求规格
+└─ .scratch/oi-path-assistant/spec.md  # 需求规格
 ```

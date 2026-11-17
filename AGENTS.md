@@ -1,4 +1,4 @@
-# Quick Path 路径助手
+# oi-path-assistant 路径助手
 
 > OpenIDEA 插件（Rust + `openidea-plugin` SDK）。通用开发规范见上级目录 `../AGENTS.md`。
 

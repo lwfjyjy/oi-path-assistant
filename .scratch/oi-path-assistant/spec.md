@@ -1,4 +1,4 @@
-# Quick Path 路径助手 — Spec
+# oi-path-assistant 路径助手 — Spec
 
 Status: ready-for-agent
 
@@ -12,7 +12,7 @@ Status: ready-for-agent
 
 ## Solution
 
-做一个 OpenIDEA 插件「Quick Path 路径助手」：
+做一个 OpenIDEA 插件「oi-path-assistant 路径助手」：
 
 - **顶部工具栏** 3 个图标按钮：**启动 Agent**、**拷贝路径**、**插入路径**。
 - **编辑器右键菜单**：**拷贝路径**、**插入路径**（与工具栏同逻辑）。
@@ -83,10 +83,10 @@ Status: ready-for-agent
 
 **Agent 启动方式**：平台无法对用户自定义的任意命令逐个授权（`process:<program>` 需固定程序名，无通配、无运行时批准）。因此统一做法是：用 `host::open_terminal_session` 在项目根起一个 **zsh 登录交互终端**（cwd=项目根，标签=Agent 名），再用 `host::write_terminal` 把该 Agent 的启动命令敲进去执行。限制：仅 zsh、依赖登录 shell 的 PATH、每插件最多 8 个终端、仅受信任项目可用。
 
-**插入按钮动态显隐**：用 `host::set_context("hasTerminal", true/false)` 设置 `plugin.lwf.quick-path.hasTerminal` 上下文，菜单项 `when = "plugin.lwf.quick-path.hasTerminal"`，实现"启动过终端后才出现/退出后消失"。最近终端的 key 存进 storage，防止闲置回收后状态丢失；订阅 `terminal-exited` 事件更新该上下文。
+**插入按钮动态显隐**：用 `host::set_context("hasTerminal", true/false)` 设置 `plugin.lwf.oi-path-assistant.hasTerminal` 上下文，菜单项 `when = "plugin.lwf.oi-path-assistant.hasTerminal"`，实现"启动过终端后才出现/退出后消失"。最近终端的 key 存进 storage，防止闲置回收后状态丢失；订阅 `terminal-exited` 事件更新该上下文。
 
 **命令与贡献点**（`plugin.toml`）：
-- commands：`launch-agent`、`copy-path`、`insert-path`、`open-config`（category `Quick Path`；前三个带 `icon=icons/*.svg`）。
+- commands：`launch-agent`、`copy-path`、`insert-path`、`open-config`（category `oi-path-assistant`；前三个带 `icon=icons/*.svg`）。
 - menus：`mainToolbar` 三条（`insert-path` 带 `when`）、`editor.context` 两条（`insert-path` 带 `when`）。
 - views：`config`（location=`right`，代码渲染 `Body::Html`，内容来自内嵌的 `config_page.html`）。
 - settings：`schema = "settings.schema.json"`，含 `autoEnter`（默认 false）、`notifyOnCopy`（默认 true）。
