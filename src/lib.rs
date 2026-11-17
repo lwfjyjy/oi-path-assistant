@@ -25,6 +25,10 @@ const CTX_HAS_TERMINAL: &str = "hasTerminal";
 /// 还没有配置任何 Agent 时的统一提示。
 const HINT_NO_AGENTS: &str = "还没有配置任何 Agent。请在「设置 › oi-path-assistant」中添加。";
 
+/// 引用串里混入换行等控制字符时的提示（终端会把换行当成「提交」）。
+const HINT_CONTROL_CHARS: &str =
+    "文件路径或模板里含换行、Tab 等控制字符，已取消（避免把文件名当成命令执行）。";
+
 /// 让 IDE 不再把常驻终端当成「命令在跑」的 OSC 133;D 标记（shell 集成的「命令结束」）。
 ///
 /// 插件开的常驻终端会被 IDE 当成「有命令一直在跑」而一直转圈；先吐这个标记后，
@@ -206,11 +210,14 @@ impl QuickPath {
             .and_then(|r| {
                 selection_lines(r.start.line, r.start.character, r.end.line, r.end.character)
             });
-        Some(render(
-            &config::template(),
-            &relative_path(&root, &path),
-            sel,
-        ))
+        let text = render(&config::template(), &relative_path(&root, &path), sel);
+        // 终端输入必须只有一行：换行、Tab、CR 等控制字符都可能被终端当成「提交」或改变输入，
+        // 恶意文件名/模板借此能注入额外命令。这里宁可直接拒绝，也不静默改写路径。
+        if text.chars().any(char::is_control) {
+            notify(NotificationLevel::Warning, HINT_CONTROL_CHARS);
+            return None;
+        }
+        Some(text)
     }
 }
 
@@ -413,6 +420,29 @@ mod tests {
         QuickPath.launch_default().unwrap();
         QuickPath.insert_path(&host.invocation()).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5\n");
+    }
+
+    #[test]
+    fn insert_rejects_control_chars_in_path() {
+        let host = host();
+        single_agent(&host);
+        // 恶意文件名：内嵌换行可让终端把后半截当成独立命令提交（即使 autoEnter=false）。
+        host.open_editor(
+            "/proj/note\nprintf OI_PATH_CONTROL_PROBE\n#.rs",
+            "rust",
+            VUE,
+            &[],
+        );
+        QuickPath.launch_default().unwrap();
+        let before = host.terminal_writes().len();
+        QuickPath.insert_path(&host.invocation()).unwrap();
+        // 不向终端写入任何内容，并给出可读提示
+        assert_eq!(host.terminal_writes().len(), before);
+        assert!(
+            host.notifications()
+                .iter()
+                .any(|n| n.level == NotificationLevel::Warning && n.body == HINT_CONTROL_CHARS)
+        );
     }
 
     #[test]
