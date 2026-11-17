@@ -61,6 +61,14 @@ menu = "editor.context"
 command = "pick-agent"
 
 [[contributes.menus]]
+menu = "editorTab.context"
+command = "pick-agent"
+
+[[contributes.menus]]
+menu = "tools"
+command = "pick-agent"
+
+[[contributes.menus]]
 menu = "editor.context"
 command = "copy-path"
 
