@@ -178,8 +178,8 @@ impl PathAssistant {
     ///
     /// 关键点：不能让 Shell 在 Agent 退出后继续停在提示符上。否则之后「插入路径」
     /// 自动回车时，文件名里的 `$(...)`、反引号等会被残留的 shell 当成命令执行。
-    /// POSIX 用 `exec` 让 Agent 替换 shell，Agent 退出终端即关闭；PowerShell/cmd 用
-    /// `; exit` / `& exit` 保证 Agent 退出后关闭终端，不留下可被自动输入的提示符。
+    /// POSIX 用 `exec` 让 Agent 替换 shell，Agent 退出终端即关闭；PowerShell 用
+    /// `try/finally` 保证即使 Agent 抛出终止性异常也会关闭终端；cmd 用 `& exit`。
     fn start_agent(&self, agent: Agent, ctx: &Invocation) -> Result<Option<String>, Error> {
         let seq = host::storage::get(KEY_TERM_SEQ)
             .ok()
@@ -315,7 +315,7 @@ impl TerminalShell {
     fn line(self, command: &str) -> String {
         match self {
             Self::PowerShell | Self::Pwsh => format!(
-                r#"[Console]::Write("$([char]27)]133;D$([char]27)\"); & {command}; exit
+                r#"[Console]::Write("$([char]27)]133;D$([char]27)\"); try {{ & {command} }} finally {{ exit }}
 "#
             ),
             Self::Cmd => format!("{command} & exit\n"),
@@ -541,11 +541,14 @@ mod tests {
             "agents",
             &json!([{ "name": "Claude Code", "command": "claude", "default": true }]).to_string(),
         );
-        PathAssistant.launch_default(&host.invocation()).unwrap();
+        PathAssistant
+            .run_command("launch-agent", &host.invocation(), None)
+            .unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
         assert!(writes[0].1.contains("[Console]::Write"));
-        assert!(writes[0].1.ends_with("& claude; exit\n"));
+        // 用 try/finally 包裹：Agent 抛终止性异常时也能关闭 Shell，避免残留提示符。
+        assert!(writes[0].1.ends_with("try { & claude } finally { exit }\n"));
     }
 
     #[test]
@@ -555,10 +558,11 @@ mod tests {
         assert!(posix.contains("133;D"));
         assert!(posix.ends_with("exec claude || exit\n"));
 
-        // PowerShell：&-调用 Agent，退出后 exit；不把命令交给残留提示符。
+        // PowerShell：用 try/finally 调用 Agent；即使抛终止性异常也会 exit 关闭终端。
         let powershell = TerminalShell::PowerShell.line("claude");
         assert!(powershell.starts_with("[Console]::Write("));
-        assert!(powershell.ends_with("& claude; exit\n"));
+        assert!(powershell.ends_with("try { & claude } finally { exit }\n"));
+        assert!(powershell.contains("finally { exit }"));
 
         // cmd：执行完立刻退出。
         assert_eq!(TerminalShell::Cmd.line("claude"), "claude & exit\n");
@@ -566,6 +570,15 @@ mod tests {
         // 平台不同，候选不同；且 POSIX 候选按 zsh → bash 顺序回退。
         let host = mock();
         assert_eq!(shell_candidates(&host.invocation()), UNIX_SHELLS);
+    }
+
+    #[test]
+    fn powershell_line_always_closes_shell() {
+        // 回归：PowerShell 必须用 try/finally 包住 Agent，终止性异常时也要 exit 关终端，
+        // 否则残留的交互 Shell 会被后续「插入路径」的自动回车当成命令执行。
+        let line = TerminalShell::Pwsh.line("agent.ps1");
+        assert!(line.contains("try { & agent.ps1 } finally { exit }"));
+        assert!(!line.contains("; exit\n"));
     }
 
     #[test]
