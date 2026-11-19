@@ -56,11 +56,11 @@ impl Plugin for QuickPath {
         &mut self,
         id: &str,
         ctx: &Invocation,
-        _arg: Option<&str>,
+        arg: Option<&str>,
     ) -> Result<Option<String>, Error> {
         match id {
-            "copy-path" => self.copy_path(ctx),
-            "insert-path" => self.insert_path(ctx),
+            "copy-path" => self.copy_path(ctx, arg),
+            "insert-path" => self.insert_path(ctx, arg),
             "launch-agent" => self.launch_default(),
             "pick-agent" => self.launch_pick(),
             other => Err(Error::NotFound(format!("command {other}"))),
@@ -83,8 +83,11 @@ impl Plugin for QuickPath {
 
 impl QuickPath {
     /// 拷贝：把当前文件 + 选区的引用写入剪贴板。
-    fn copy_path(&self, ctx: &Invocation) -> Result<Option<String>, Error> {
-        let Some(text) = self.current_ref(ctx) else {
+    ///
+    /// `arg` 是右键菜单传来的目标路径（如在左侧文件树右键）：有它时以该文件为准，
+    /// 没有时回退到当前编辑器 + 选区。
+    fn copy_path(&self, ctx: &Invocation, arg: Option<&str>) -> Result<Option<String>, Error> {
+        let Some(text) = self.resolve_ref(ctx, arg) else {
             return Ok(None);
         };
         host::copy_to_clipboard(&text)?;
@@ -95,8 +98,8 @@ impl QuickPath {
     }
 
     /// 插入：把同样内容直接写进最近一次启动的 Agent 终端（不经过剪贴板）。
-    fn insert_path(&self, ctx: &Invocation) -> Result<Option<String>, Error> {
-        let Some(text) = self.current_ref(ctx) else {
+    fn insert_path(&self, ctx: &Invocation, arg: Option<&str>) -> Result<Option<String>, Error> {
+        let Some(text) = self.resolve_ref(ctx, arg) else {
             return Ok(None);
         };
         let Some(key) = last_terminal() else {
@@ -190,6 +193,31 @@ impl QuickPath {
         Ok(None)
     }
 
+    /// 解析本次引用的目标：右键菜单带有目标路径 `arg` 时优先用它（左侧文件树等），
+    /// 否则回退到「当前编辑器 + 选区」。
+    fn resolve_ref(&self, ctx: &Invocation, arg: Option<&str>) -> Option<String> {
+        let Some(path) = arg.map(str::trim).filter(|p| !p.is_empty()) else {
+            return self.current_ref(ctx);
+        };
+        let Some(project) = ctx.project() else {
+            notify(
+                NotificationLevel::Warning,
+                "该文件不在任何项目中，无法计算相对路径。",
+            );
+            return None;
+        };
+        let Ok(root) = project.root() else {
+            notify(NotificationLevel::Warning, "无法读取项目根目录。");
+            return None;
+        };
+        // 右键菜单没有行选区，只拼纯路径。
+        self.check_text(render(
+            &config::template(),
+            &relative_path(&root, path),
+            None,
+        ))
+    }
+
     /// 算出「当前文件 + 选区」拼成的引用串；失败时已给出提示，返回 `None`。
     fn current_ref(&self, ctx: &Invocation) -> Option<String> {
         let Some(editor) = ctx.editor() else {
@@ -220,8 +248,12 @@ impl QuickPath {
                 selection_lines(r.start.line, r.start.character, r.end.line, r.end.character)
             });
         let text = render(&config::template(), &relative_path(&root, &path), sel);
-        // 终端输入必须只有一行：换行、Tab、CR 等控制字符都可能被终端当成「提交」或改变输入，
-        // 恶意文件名/模板借此能注入额外命令。这里宁可直接拒绝，也不静默改写路径。
+        self.check_text(text)
+    }
+
+    /// 终端输入必须只有一行：换行、Tab、CR 等控制字符都可能被终端当成「提交」或改变输入，
+    /// 恶意文件名/模板借此能注入额外命令。这里宁可直接拒绝，也不静默改写路径。
+    fn check_text(&self, text: String) -> Option<String> {
         if text.chars().any(char::is_control) {
             notify(NotificationLevel::Warning, HINT_CONTROL_CHARS);
             return None;
@@ -305,7 +337,7 @@ mod tests {
     fn copy_path_single_line_to_clipboard() {
         let host = host();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.copy_path(&host.invocation()).unwrap();
+        QuickPath.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue#L5"));
         assert_eq!(host.notifications().len(), 1);
     }
@@ -314,7 +346,7 @@ mod tests {
     fn copy_path_many_lines() {
         let host = host();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
-        QuickPath.copy_path(&host.invocation()).unwrap();
+        QuickPath.copy_path(&host.invocation(), None).unwrap();
         // 从第 5 行行首到第 9 行行首 = 5..8 行
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue#L5-L8"));
     }
@@ -323,8 +355,31 @@ mod tests {
     fn copy_path_no_selection_is_plain_path() {
         let host = host();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[]);
-        QuickPath.copy_path(&host.invocation()).unwrap();
+        QuickPath.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue"));
+    }
+
+    #[test]
+    fn copy_path_from_project_view_uses_target_path() {
+        let host = host();
+        // 当前编辑器停在 A.vue，但在左侧文件树右键的是 B.vue：应以参数 B.vue 为准。
+        host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
+        QuickPath
+            .copy_path(&host.invocation(), Some("/proj/src/B.vue"))
+            .unwrap();
+        assert_eq!(host.clipboard().as_deref(), Some("@src/B.vue"));
+    }
+
+    #[test]
+    fn insert_path_from_project_view_uses_target_path() {
+        let host = host();
+        single_agent(&host);
+        host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
+        QuickPath.launch_default().unwrap();
+        QuickPath
+            .insert_path(&host.invocation(), Some("/proj/src/B.vue"))
+            .unwrap();
+        assert_eq!(host.terminal_writes().last().unwrap().1, "@src/B.vue");
     }
 
     #[test]
@@ -332,14 +387,14 @@ mod tests {
         let host = host();
         host.set_setting("templatePreset", &json!("Codex").to_string());
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
-        QuickPath.copy_path(&host.invocation()).unwrap();
+        QuickPath.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue:5-8"));
     }
 
     #[test]
     fn copy_path_without_editor_notifies() {
         let host = host();
-        QuickPath.copy_path(&host.invocation()).unwrap();
+        QuickPath.copy_path(&host.invocation(), None).unwrap();
         assert!(host.clipboard().is_none());
         assert_eq!(host.notifications().len(), 1);
     }
@@ -415,7 +470,7 @@ mod tests {
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
         QuickPath.launch_default().unwrap();
-        QuickPath.insert_path(&host.invocation()).unwrap();
+        QuickPath.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5");
         assert!(host.clipboard().is_none());
     }
@@ -427,7 +482,7 @@ mod tests {
         host.set_setting("autoEnter", "true");
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
         QuickPath.launch_default().unwrap();
-        QuickPath.insert_path(&host.invocation()).unwrap();
+        QuickPath.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5\n");
     }
 
@@ -444,7 +499,7 @@ mod tests {
         );
         QuickPath.launch_default().unwrap();
         let before = host.terminal_writes().len();
-        QuickPath.insert_path(&host.invocation()).unwrap();
+        QuickPath.insert_path(&host.invocation(), None).unwrap();
         // 不向终端写入任何内容，并给出可读提示
         assert_eq!(host.terminal_writes().len(), before);
         assert!(
@@ -474,7 +529,7 @@ mod tests {
         let event = host.finish_terminal(&key).unwrap();
         plugin.handle_events(&[event], &host.invocation());
         let before = host.terminal_writes().len();
-        plugin.insert_path(&host.invocation()).unwrap();
+        plugin.insert_path(&host.invocation(), None).unwrap();
         // 不向任何残留终端写入内容，并给出提示
         assert_eq!(host.terminal_writes().len(), before);
         assert!(
@@ -488,7 +543,7 @@ mod tests {
     fn insert_without_terminal_notifies() {
         let host = host();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.insert_path(&host.invocation()).unwrap();
+        QuickPath.insert_path(&host.invocation(), None).unwrap();
         assert!(host.terminal_writes().is_empty());
         assert!(
             host.notifications()

@@ -1,6 +1,6 @@
 id = "lwf.oi-path-assistant"
 name = "oi-path-assistant"
-version = "0.1.2"
+version = "0.1.3"
 description = "把当前文件与选中行拼成 AI agent 可识别的路径引用，一键拷贝或插入终端。"
 authors = ["lwf"]
 license = "MIT"
@@ -68,6 +68,19 @@ when = "plugin.lwf.oi-path-assistant.hasTerminal"
 
 [[contributes.menus]]
 menu = "editor.context"
+command = "pick-agent"
+
+[[contributes.menus]]
+menu = "projectView.context"
+command = "copy-path"
+
+[[contributes.menus]]
+menu = "projectView.context"
+command = "insert-path"
+when = "plugin.lwf.oi-path-assistant.hasTerminal"
+
+[[contributes.menus]]
+menu = "projectView.context"
 command = "pick-agent"
 
 [[contributes.menus]]
