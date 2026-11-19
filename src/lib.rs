@@ -57,8 +57,8 @@ impl Plugin for PathAssistant {
         match id {
             "copy-path" => self.copy_path(ctx, arg),
             "insert-path" => self.insert_path(ctx, arg),
-            "launch-agent" => self.launch_default(),
-            "pick-agent" => self.launch_pick(),
+            "launch-agent" => self.launch_default(ctx),
+            "pick-agent" => self.launch_pick(ctx),
             other => Err(Error::NotFound(format!("command {other}"))),
         }
     }
@@ -118,9 +118,9 @@ impl PathAssistant {
     }
 
     /// 左键启动：直接启动「默认」Agent（设置里勾选的那个），不弹框。
-    fn launch_default(&self) -> Result<Option<String>, Error> {
+    fn launch_default(&self, ctx: &Invocation) -> Result<Option<String>, Error> {
         match config::default_agent() {
-            Some(agent) => self.start_or_warn(agent),
+            Some(agent) => self.start_or_warn(agent, ctx),
             None => {
                 notify(NotificationLevel::Warning, HINT_NO_AGENTS);
                 Ok(None)
@@ -129,7 +129,7 @@ impl PathAssistant {
     }
 
     /// 右键选择启动：弹出列表，选哪个启动哪个。
-    fn launch_pick(&self) -> Result<Option<String>, Error> {
+    fn launch_pick(&self, ctx: &Invocation) -> Result<Option<String>, Error> {
         let agents = config::agents();
         if agents.is_empty() {
             notify(NotificationLevel::Warning, HINT_NO_AGENTS);
@@ -146,30 +146,34 @@ impl PathAssistant {
             return Ok(None);
         };
         match agents.into_iter().nth(index) {
-            Some(agent) => self.start_or_warn(agent),
+            Some(agent) => self.start_or_warn(agent, ctx),
             None => Ok(None),
         }
     }
 
-    /// 启动失败（如项目未受信任）给出可读提示，而不是把裸错误抛给界面。
-    fn start_or_warn(&self, agent: Agent) -> Result<Option<String>, Error> {
-        match self.start_agent(agent) {
+    /// 启动失败（如项目未受信任或缺少 Shell 权限）给出可读提示，而不是把裸错误抛给界面。
+    fn start_or_warn(&self, agent: Agent, ctx: &Invocation) -> Result<Option<String>, Error> {
+        match self.start_agent(agent, ctx) {
             Ok(out) => Ok(out),
             Err(e) => {
-                notify(NotificationLevel::Warning, &format!("启动失败：{e}"));
+                let hint = if is_windows(ctx) {
+                    "\nWindows 请在「设置 › 插件 › oi-path-assistant › 权限」里允许 PowerShell 或 cmd。"
+                } else {
+                    ""
+                };
+                notify(NotificationLevel::Warning, &format!("启动失败：{e}{hint}"));
                 Ok(None)
             }
         }
     }
 
-    /// 在项目根起一个 zsh 登录终端，用 `exec` 把 Agent 命令替换掉这个 shell 再执行。
+    /// 在项目根起一个终端，把 Agent 命令交给对应平台的 Shell 执行。
     ///
-    /// 关键点：不能让登录 shell 在 Agent 退出后继续停在提示符上。否则之后「插入路径」
+    /// 关键点：不能让 Shell 在 Agent 退出后继续停在提示符上。否则之后「插入路径」
     /// 自动回车时，文件名里的 `$(...)`、反引号等会被残留的 shell 当成命令执行。
-    /// 用 `exec` 后，shell 自身变成 Agent 进程：Agent 一旦退出终端即关闭，不存在
-    /// 「Agent 已退出但 shell 还在」的中间态；`|| exit` 保证命令启动失败时直接关终端，
-    /// 而不是退回到一个可被自动输入的 shell。
-    fn start_agent(&self, agent: Agent) -> Result<Option<String>, Error> {
+    /// POSIX 用 `exec` 让 Agent 替换 shell，Agent 退出终端即关闭；PowerShell/cmd 用
+    /// `; exit` / `& exit` 保证 Agent 退出后关闭终端，不留下可被自动输入的提示符。
+    fn start_agent(&self, agent: Agent, ctx: &Invocation) -> Result<Option<String>, Error> {
         let seq = host::storage::get(KEY_TERM_SEQ)
             .ok()
             .flatten()
@@ -177,15 +181,24 @@ impl PathAssistant {
             .unwrap_or(0)
             + 1;
         let key = format!("agent-{seq}");
-        host::open_terminal_session(&key, &agent.name, &Command::new("zsh").arg("-l"))?;
-        host::write_terminal(
-            &key,
-            &format!("{TERM_CMD_DONE}exec {} || exit\n", agent.command),
-        )?;
-        host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
-        host::storage::set(KEY_LAST_TERMINAL, &key)?;
-        let _ = host::set_context(CTX_HAS_TERMINAL, true);
-        Ok(None)
+        let mut last_error = None;
+        for program in shell_candidates(ctx) {
+            let mut command = Command::new(program);
+            if matches!(program, "zsh" | "bash") {
+                command = command.arg("-l");
+            }
+            match host::open_terminal_session(&key, &agent.name, &command) {
+                Ok(_) => {
+                    host::write_terminal(&key, &shell_line(program, &agent.command))?;
+                    host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
+                    host::storage::set(KEY_LAST_TERMINAL, &key)?;
+                    let _ = host::set_context(CTX_HAS_TERMINAL, true);
+                    return Ok(None);
+                }
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| Error::Failed("没有可用的终端 Shell".into())))
     }
 
     /// 解析本次引用的目标：右键菜单带有目标路径 `arg` 时优先用它（左侧文件树等），
@@ -250,6 +263,38 @@ impl PathAssistant {
             return None;
         }
         Some(text)
+    }
+}
+
+/// 项目路径看起来是 Windows 路径（`C:\…` 或含反斜杠）。
+fn is_windows(ctx: &Invocation) -> bool {
+    let root = ctx
+        .project()
+        .and_then(|p| p.root().ok())
+        .unwrap_or_default();
+    root.contains('\\') || root.as_bytes().get(1) == Some(&b':')
+}
+
+/// 按平台给出 Shell 候选：Windows 用 PowerShell/cmd，其他平台用 zsh/bash。
+/// 逐个尝试，避免某个 Shell 未安装时直接失败。
+fn shell_candidates(ctx: &Invocation) -> Vec<&'static str> {
+    if is_windows(ctx) {
+        vec!["powershell", "pwsh", "cmd"]
+    } else {
+        vec!["zsh", "bash"]
+    }
+}
+
+/// 不同 Shell 的启动语句：先清掉 IDE 的「命令运行中」标记，再执行 Agent，
+/// 并保证 Agent 退出后终端关闭（不残留可被自动输入的提示符）。
+fn shell_line(program: &str, command: &str) -> String {
+    match program {
+        "powershell" | "pwsh" => format!(
+            r#"[Console]::Write("$([char]27)]133;D$([char]27)\"); & {command}; exit
+"#
+        ),
+        "cmd" => format!("{command} & exit\n"),
+        _ => format!("{TERM_CMD_DONE}exec {command} || exit\n"),
     }
 }
 
@@ -365,7 +410,7 @@ mod tests {
         let host = mock();
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         PathAssistant
             .insert_path(&host.invocation(), Some("/proj/src/B.vue"))
             .unwrap();
@@ -407,7 +452,7 @@ mod tests {
     fn launch_single_agent_writes_command() {
         let host = mock();
         single_agent(&host);
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
         assert!(writes[0].1.ends_with("exec claude || exit\n"));
@@ -422,11 +467,33 @@ mod tests {
     }
 
     #[test]
+    fn launch_uses_powershell_on_windows_project() {
+        let host = MockHost::install().with_capabilities(&[
+            "editor.read",
+            "clipboard",
+            "storage",
+            "project.read",
+            "process:powershell",
+        ]);
+        // Windows 项目路径没有 zsh：自动改用 PowerShell，并把 Agent 命令交给它执行。
+        host.set_project_root(Some(r"C:\proj"));
+        host.set_setting(
+            "agents",
+            &json!([{ "name": "Claude Code", "command": "claude", "default": true }]).to_string(),
+        );
+        PathAssistant.launch_default(&host.invocation()).unwrap();
+        let writes = host.terminal_writes();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].1.contains("[Console]::Write"));
+        assert!(writes[0].1.ends_with("& claude; exit\n"));
+    }
+
+    #[test]
     fn launch_pick_selects_agent() {
         let host = mock();
         // 默认六个 Agent，Codex 在下标 1；选择项 key 就是下标。
         host.answer_next_prompt(Some(&["1"]));
-        PathAssistant.launch_pick().unwrap();
+        PathAssistant.launch_pick(&host.invocation()).unwrap();
         // 选中的是 Codex，验证敲进去的是 codex 命令
         assert!(
             host.terminal_writes()
@@ -449,7 +516,7 @@ mod tests {
             ])
             .to_string(),
         );
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         assert!(
             host.terminal_writes()
                 .last()
@@ -463,7 +530,7 @@ mod tests {
     fn launch_without_agents_notifies_and_starts_nothing() {
         let host = mock();
         host.set_setting("agents", "[]");
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         assert!(host.terminal_writes().is_empty());
         assert_eq!(host.notifications().len(), 1);
     }
@@ -473,7 +540,7 @@ mod tests {
         let host = mock();
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         PathAssistant.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5");
         assert!(host.clipboard().is_none());
@@ -485,7 +552,7 @@ mod tests {
         single_agent(&host);
         host.set_setting("autoEnter", "true");
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         PathAssistant.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5\n");
     }
@@ -501,7 +568,7 @@ mod tests {
             VUE,
             &[],
         );
-        PathAssistant.launch_default().unwrap();
+        PathAssistant.launch_default(&host.invocation()).unwrap();
         let before = host.terminal_writes().len();
         PathAssistant.insert_path(&host.invocation(), None).unwrap();
         // 不向终端写入任何内容，并给出可读提示
@@ -527,7 +594,7 @@ mod tests {
             &[],
         );
         let mut plugin = PathAssistant;
-        plugin.launch_default().unwrap();
+        plugin.launch_default(&host.invocation()).unwrap();
         // Agent 退出 = 终端关闭（因为启动时用 exec 替换了 shell）
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
         let event = host.finish_terminal(&key).unwrap();
@@ -561,7 +628,7 @@ mod tests {
         let host = mock();
         single_agent(&host);
         let mut plugin = PathAssistant;
-        plugin.launch_default().unwrap();
+        plugin.launch_default(&host.invocation()).unwrap();
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
         let event = host.finish_terminal(&key).unwrap();
         plugin.handle_events(&[event], &host.invocation());

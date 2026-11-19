@@ -1,6 +1,6 @@
 id = "lwf.oi-path-assistant"
 name = "oi-path-assistant"
-version = "0.1.3"
+version = "0.1.4"
 description = "把当前文件与选中行拼成 AI agent 可识别的路径引用，一键拷贝或插入终端。"
 authors = ["lwf"]
 license = "MIT"
@@ -19,6 +19,8 @@ activation = [
 
 [capabilities]
 required = ["editor.read", "clipboard", "storage", "project.read", "process:zsh"]
+# Windows 没有 zsh：PowerShell / pwsh / cmd 作为可选权限，按需在安装页勾选。
+optional = ["process:bash", "process:powershell", "process:pwsh", "process:cmd"]
 
 [[contributes.commands]]
 id = "launch-agent"

@@ -48,9 +48,18 @@
 | `project.read` | 读取项目根目录，计算相对路径 |
 | `process:zsh` | 在项目根启动 zsh 终端并执行 Agent 命令（高风险，仅受信任项目可用） |
 
-> 「启动 Agent」的做法是：在项目根开一个 **zsh 登录终端**，再用 `exec` 把 Agent 的启动命令**替换掉这个 shell** 执行（平台无法对用户自定义的任意命令逐个授权，只能固定用 `zsh`）。因此仅支持 zsh、依赖登录 shell 的 PATH，每个插件最多 8 个终端。
+可选权限（按平台勾选）：
+
+| 能力 | 用途 |
+| --- | --- |
+| `process:bash` | macOS/Linux 没有 zsh 时改用 bash |
+| `process:powershell` / `process:pwsh` / `process:cmd` | Windows 启动 Agent（Windows 没有 zsh） |
+
+> 「启动 Agent」的做法是：在项目根开一个**终端**，再用 `exec`（POSIX）或 `; exit` / `& exit`（PowerShell / cmd）把 Agent 的启动命令**替换掉这个 shell** 执行（平台无法对用户自定义的任意命令逐个授权，只能固定用 shell）。macOS/Linux 用 zsh（找不到则 bash），Windows 用 PowerShell（找不到则 pwsh / cmd）；每个插件最多 8 个终端。
 >
-> ⚠️ 因为用了 `exec`，Agent 退出后终端会**随之关闭**，不会留下一个可以被自动输入的 shell 提示符。启动命令请填**单个可执行命令**（可带参数，如 `claude --model opus`），不要写 `a && b`、管道等 shell 组合语句。
+> ⚠️ Agent 退出后终端会**随之关闭**，不会留下一个可以被自动输入的 shell 提示符。启动命令请填**单个可执行命令**（可带参数，如 `claude --model opus`），不要写 `a && b`、管道等 shell 组合语句。
+>
+> Windows 用户请在「设置 › 插件 › oi-path-assistant › 权限」里允许 **PowerShell** 或 **cmd**。
 
 ## 构建
 
