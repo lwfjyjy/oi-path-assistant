@@ -35,6 +35,16 @@ const HINT_CONTROL_CHARS: &str =
 /// IDE 认为命令已结束就不再转圈——只影响那个转圈图标，终端照常可用。
 const TERM_CMD_DONE: &str = r"printf '\033]133;D\033\\'; ";
 
+/// 插件对外显示的名字（通知标题）。
+const PLUGIN_NAME: &str = "oi-path-assistant";
+
+/// 统一的用户提示文案，避免多处重复。
+const HINT_NO_TERMINAL: &str = "还没有启动过 Agent 终端，请先点「启动 Agent」。";
+const HINT_TERMINAL_CLOSED: &str = "Agent 终端已关闭，请重新启动。";
+const HINT_WINDOWS_PERMISSION: &str =
+    "\nWindows 请在「设置 › 插件 › oi-path-assistant › 权限」里允许 PowerShell 或 cmd。";
+const HINT_NO_SHELL: &str = "没有可用的终端 Shell";
+
 /// 插件本体（无状态：配置每次从 IDE 设置读取）。
 #[derive(Default)]
 pub struct PathAssistant;
@@ -98,10 +108,7 @@ impl PathAssistant {
             return Ok(None);
         };
         let Some(key) = last_terminal() else {
-            notify(
-                NotificationLevel::Warning,
-                "还没有启动过 Agent 终端，请先点「启动 Agent」。",
-            );
+            notify(NotificationLevel::Warning, HINT_NO_TERMINAL);
             return Ok(None);
         };
         let payload = if config::auto_enter() {
@@ -112,7 +119,7 @@ impl PathAssistant {
         if host::write_terminal(&key, &payload).is_err() {
             // 终端已被关闭：清理状态，让「插入路径」重新隐藏。
             clear_last_terminal();
-            notify(NotificationLevel::Warning, "Agent 终端已关闭，请重新启动。");
+            notify(NotificationLevel::Warning, HINT_TERMINAL_CLOSED);
         }
         Ok(None)
     }
@@ -157,7 +164,7 @@ impl PathAssistant {
             Ok(out) => Ok(out),
             Err(e) => {
                 let hint = if is_windows(ctx) {
-                    "\nWindows 请在「设置 › 插件 › oi-path-assistant › 权限」里允许 PowerShell 或 cmd。"
+                    HINT_WINDOWS_PERMISSION
                 } else {
                     ""
                 };
@@ -182,14 +189,10 @@ impl PathAssistant {
             + 1;
         let key = format!("agent-{seq}");
         let mut last_error = None;
-        for program in shell_candidates(ctx) {
-            let mut command = Command::new(program);
-            if matches!(program, "zsh" | "bash") {
-                command = command.arg("-l");
-            }
-            match host::open_terminal_session(&key, &agent.name, &command) {
+        for shell in shell_candidates(ctx) {
+            match host::open_terminal_session(&key, &agent.name, &shell.launch_command()) {
                 Ok(_) => {
-                    host::write_terminal(&key, &shell_line(program, &agent.command))?;
+                    host::write_terminal(&key, &shell.line(&agent.command))?;
                     host::storage::set(KEY_TERM_SEQ, &seq.to_string())?;
                     host::storage::set(KEY_LAST_TERMINAL, &key)?;
                     let _ = host::set_context(CTX_HAS_TERMINAL, true);
@@ -198,7 +201,7 @@ impl PathAssistant {
                 Err(e) => last_error = Some(e),
             }
         }
-        Err(last_error.unwrap_or_else(|| Error::Failed("没有可用的终端 Shell".into())))
+        Err(last_error.unwrap_or_else(|| Error::Failed(HINT_NO_SHELL.into())))
     }
 
     /// 解析本次引用的目标：右键菜单带有目标路径 `arg` 时优先用它（左侧文件树等），
@@ -275,26 +278,65 @@ fn is_windows(ctx: &Invocation) -> bool {
     root.contains('\\') || root.as_bytes().get(1) == Some(&b':')
 }
 
-/// 按平台给出 Shell 候选：Windows 用 PowerShell/cmd，其他平台用 zsh/bash。
-/// 逐个尝试，避免某个 Shell 未安装时直接失败。
-fn shell_candidates(ctx: &Invocation) -> Vec<&'static str> {
-    if is_windows(ctx) {
-        vec!["powershell", "pwsh", "cmd"]
-    } else {
-        vec!["zsh", "bash"]
+/// 支持的终端 Shell。集中在这里，新增平台只改这一处。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalShell {
+    Zsh,
+    Bash,
+    PowerShell,
+    Pwsh,
+    Cmd,
+}
+
+impl TerminalShell {
+    /// 传给 host 的程序名。
+    fn program(self) -> &'static str {
+        match self {
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::PowerShell => "powershell",
+            Self::Pwsh => "pwsh",
+            Self::Cmd => "cmd",
+        }
+    }
+
+    /// 打开终端的命令；POSIX 登录 shell 需要 `-l` 才会加载用户的 PATH。
+    fn launch_command(self) -> Command {
+        let command = Command::new(self.program());
+        if matches!(self, Self::Zsh | Self::Bash) {
+            command.arg("-l")
+        } else {
+            command
+        }
+    }
+
+    /// 启动语句：先清掉 IDE 的「命令运行中」标记，再执行 Agent，
+    /// 并保证 Agent 退出后终端关闭（不残留可被自动输入的提示符）。
+    fn line(self, command: &str) -> String {
+        match self {
+            Self::PowerShell | Self::Pwsh => format!(
+                r#"[Console]::Write("$([char]27)]133;D$([char]27)\"); & {command}; exit
+"#
+            ),
+            Self::Cmd => format!("{command} & exit\n"),
+            Self::Zsh | Self::Bash => format!("{TERM_CMD_DONE}exec {command} || exit\n"),
+        }
     }
 }
 
-/// 不同 Shell 的启动语句：先清掉 IDE 的「命令运行中」标记，再执行 Agent，
-/// 并保证 Agent 退出后终端关闭（不残留可被自动输入的提示符）。
-fn shell_line(program: &str, command: &str) -> String {
-    match program {
-        "powershell" | "pwsh" => format!(
-            r#"[Console]::Write("$([char]27)]133;D$([char]27)\"); & {command}; exit
-"#
-        ),
-        "cmd" => format!("{command} & exit\n"),
-        _ => format!("{TERM_CMD_DONE}exec {command} || exit\n"),
+/// 各平台的 Shell 候选：逐个尝试，避免某个 Shell 未安装时直接失败。
+const UNIX_SHELLS: &[TerminalShell] = &[TerminalShell::Zsh, TerminalShell::Bash];
+const WINDOWS_SHELLS: &[TerminalShell] = &[
+    TerminalShell::PowerShell,
+    TerminalShell::Pwsh,
+    TerminalShell::Cmd,
+];
+
+fn shell_candidates(ctx: &Invocation) -> &'static [TerminalShell] {
+    if is_windows(ctx) {
+        WINDOWS_SHELLS
+    } else {
+        UNIX_SHELLS
     }
 }
 
@@ -310,17 +352,35 @@ fn last_terminal() -> Option<String> {
 ///
 /// 这里用字符串而非 `std::path`：插件编译成 wasm，`Path` 会按 unix 语义解析，
 /// 在 Windows 的 `\` 路径上会失效；先把 `\` 统一成 `/` 即可跨平台正确。
+/// 前缀比较忽略 ASCII 大小写（Windows 盘符/目录不区分大小写），但仍按原路径切片，
+/// 因此输出保留用户路径的真实大小写。
 fn relative_path(root: &str, path: &str) -> Option<String> {
     let root = root.replace('\\', "/");
     let root = root.trim_end_matches('/');
+    if root.is_empty() {
+        return None;
+    }
     let path = path.replace('\\', "/");
-    // 只认落在项目根「之下」的路径，避免 /proj 误配 /proj2；项目根自身没有可引用的相对路径。
-    let rel = path.strip_prefix(root).filter(|r| r.starts_with('/'))?;
-    let rel = rel
+    let prefix = path.get(..root.len())?;
+    // 只有 Windows 盘符路径忽略大小写；POSIX 路径保持大小写敏感。
+    let same = if root.as_bytes().get(1) == Some(&b':') {
+        prefix.eq_ignore_ascii_case(root)
+    } else {
+        prefix == root
+    };
+    if !same {
+        return None;
+    }
+    let rel = path[root.len()..].strip_prefix('/')?;
+    // 拒绝含 `..` 的路径，避免把项目外的文件伪装成项目相对路径。
+    let parts: Vec<&str> = rel
         .split('/')
         .filter(|s| !s.is_empty() && *s != ".")
-        .collect::<Vec<_>>()
-        .join("/");
+        .collect();
+    if parts.contains(&"..") {
+        return None;
+    }
+    let rel = parts.join("/");
     (!rel.is_empty()).then_some(rel)
 }
 
@@ -332,7 +392,7 @@ fn clear_last_terminal() {
 
 /// 统一的用户提示。
 fn notify(level: NotificationLevel, body: &str) {
-    host::notify(level, "oi-path-assistant", body);
+    host::notify(level, PLUGIN_NAME, body);
 }
 
 register_plugin!(PathAssistant);
@@ -486,6 +546,45 @@ mod tests {
         assert_eq!(writes.len(), 1);
         assert!(writes[0].1.contains("[Console]::Write"));
         assert!(writes[0].1.ends_with("& claude; exit\n"));
+    }
+
+    #[test]
+    fn shell_lines_are_safe_and_platform_specific() {
+        // POSIX：先清 OSC 标记，再用 exec 替换 shell，Agent 退出即关终端。
+        let posix = TerminalShell::Zsh.line("claude");
+        assert!(posix.contains("133;D"));
+        assert!(posix.ends_with("exec claude || exit\n"));
+
+        // PowerShell：&-调用 Agent，退出后 exit；不把命令交给残留提示符。
+        let powershell = TerminalShell::PowerShell.line("claude");
+        assert!(powershell.starts_with("[Console]::Write("));
+        assert!(powershell.ends_with("& claude; exit\n"));
+
+        // cmd：执行完立刻退出。
+        assert_eq!(TerminalShell::Cmd.line("claude"), "claude & exit\n");
+
+        // 平台不同，候选不同；且 POSIX 候选按 zsh → bash 顺序回退。
+        let host = mock();
+        assert_eq!(shell_candidates(&host.invocation()), UNIX_SHELLS);
+    }
+
+    #[test]
+    fn launch_falls_back_to_bash_when_zsh_missing() {
+        // 只授予 bash 权限：zsh 打开失败后应自动尝试 bash，而不是直接报错。
+        let host = MockHost::install().with_capabilities(&[
+            "editor.read",
+            "clipboard",
+            "storage",
+            "project.read",
+            "process:bash",
+        ]);
+        host.set_project_root(Some("/proj"));
+        single_agent(&host);
+        PathAssistant.launch_default(&host.invocation()).unwrap();
+        let writes = host.terminal_writes();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].1.ends_with("exec claude || exit\n"));
+        assert_eq!(host.storage().get(KEY_LAST_TERMINAL), Some(&writes[0].0));
     }
 
     #[test]
@@ -654,9 +753,20 @@ mod tests {
         assert_eq!(relative_path("/proj", "/proj2/x"), None);
         // 项目根自身没有可引用的相对路径
         assert_eq!(relative_path("/proj", "/proj"), None);
+        // 空根不能把任意绝对路径都当成相对路径
+        assert_eq!(relative_path("", "/etc/passwd"), None);
+        // 路径穿越必须拒绝
+        assert_eq!(relative_path("/proj", "/proj/../etc/passwd"), None);
+        // POSIX 路径区分大小写
+        assert_eq!(relative_path("/proj", "/PROJ/x"), None);
         // Windows 风格反斜杠
         assert_eq!(
             relative_path(r"C:\proj", r"C:\proj\src\A.java").as_deref(),
+            Some("src/A.java")
+        );
+        // Windows 路径大小写不敏感，但仍保留原路径大小写
+        assert_eq!(
+            relative_path(r"C:\Proj", r"c:\proj\src\A.java").as_deref(),
             Some("src/A.java")
         );
         // 折叠 ./ 与多余分隔符
