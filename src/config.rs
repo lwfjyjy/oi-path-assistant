@@ -35,50 +35,51 @@ const KEY_PRESET: &str = "templatePreset";
 const KEY_AUTO_ENTER: &str = "autoEnter";
 const KEY_NOTIFY_ON_COPY: &str = "notifyOnCopy";
 
-/// 一个可启动的 Agent。
-#[derive(Clone, Debug, PartialEq)]
+/// 一个可启动的 Agent（也就是设置表格的一行：名称 / 启动命令 / 是否默认）。
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Agent {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub command: String,
     /// 是否为「默认启动」的那个；正常只有一项为 true。
+    #[serde(rename = "default", default)]
     pub is_default: bool,
 }
 
-/// 设置表格里的一行（名称 / 启动命令 / 是否默认）。
-#[derive(Deserialize)]
-struct Row {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    command: String,
-    #[serde(rename = "default", default)]
-    is_default: bool,
-}
-
-impl Row {
-    /// 转成 Agent；名称或命令为空的行忽略，避免启动空命令。
-    fn into_agent(self) -> Option<Agent> {
+impl Agent {
+    /// 清洗一行：名称或命令为空的行忽略（避免启动空命令）；控制字符也拒绝。
+    ///
+    /// 控制字符（换行、Tab 等）不能进终端：命令会被原样写进去，
+    /// 换行会让后半截变成另一条命令；名称还会作为终端标题显示。
+    fn normalized(self) -> Option<Agent> {
         let name = self.name.trim();
         let command = self.command.trim();
-        (!name.is_empty() && !command.is_empty()).then(|| Agent {
-            name: name.to_owned(),
-            command: command.to_owned(),
-            is_default: self.is_default,
-        })
+        let no_control = |s: &str| !s.chars().any(char::is_control);
+        (!name.is_empty() && !command.is_empty() && no_control(name) && no_control(command)).then(
+            || Agent {
+                name: name.to_owned(),
+                command: command.to_owned(),
+                is_default: self.is_default,
+            },
+        )
     }
 }
 
-/// 只取路径模板（渲染引用时用，省去解析 Agent 列表）。
+/// 路径模板（渲染引用时用，省去解析 Agent 列表）。
+#[must_use]
 pub fn template() -> String {
-    read_template()
+    custom_template().unwrap_or_else(preset_template)
 }
 
 /// 全部 Agent；没有配置过就用内置列表。
+#[must_use]
 pub fn agents() -> Vec<Agent> {
     read_agents()
 }
 
 /// 「默认」Agent：勾了的第一项；都没勾退回第一项；没有 Agent 时返回 `None`。
+#[must_use]
 pub fn default_agent() -> Option<Agent> {
     pick_default(&read_agents()).cloned()
 }
@@ -92,32 +93,29 @@ fn pick_default(agents: &[Agent]) -> Option<&Agent> {
 }
 
 /// 插入路径后是否自动回车。
+#[must_use]
 pub fn auto_enter() -> bool {
     host::setting_bool(KEY_AUTO_ENTER).unwrap_or(false)
 }
 
 /// 拷贝路径后是否弹提示。
+#[must_use]
 pub fn notify_on_copy() -> bool {
     host::setting_bool(KEY_NOTIFY_ON_COPY).unwrap_or(true)
 }
 
-/// 读取 Agent 表格；没有设置过就用内置列表。
+/// 读取 Agent 表格；没有设置过或格式不对都回落到内置列表。
 fn read_agents() -> Vec<Agent> {
-    let mut agents = match read_rows() {
-        Some(rows) => rows
-            .into_iter()
-            .filter_map(Row::into_agent)
-            .take(MAX_AGENTS)
-            .collect(),
-        None => builtin_agents(),
-    };
+    let mut agents = host::setting(KEY_AGENTS)
+        .and_then(|s| serde_json::from_str::<Vec<Agent>>(&s).ok())
+        .map_or_else(builtin_agents, |rows| {
+            rows.into_iter()
+                .filter_map(Agent::normalized)
+                .take(MAX_AGENTS)
+                .collect()
+        });
     ensure_single_default(&mut agents);
     agents
-}
-
-/// 把设置里的 `agents` 解析成行；键不存在或格式不对都返回 `None`。
-fn read_rows() -> Option<Vec<Row>> {
-    host::setting(KEY_AGENTS).and_then(|s| serde_json::from_str(&s).ok())
 }
 
 /// 「默认」只能有一个：都没勾就选第一项，勾了多个只认第一个勾的。
@@ -141,22 +139,17 @@ fn builtin_agents() -> Vec<Agent> {
         .collect()
 }
 
-/// 以「自定义模板」为准：填了用它，留空才用上面的「模板预设」。
-fn read_template() -> String {
-    custom_template().unwrap_or_else(preset_template)
-}
-
 /// 读「自定义模板」文本框；空白字符串视为没填。
 fn custom_template() -> Option<String> {
     host::setting_string(KEY_TEMPLATE).filter(|s| !s.trim().is_empty())
 }
 
-/// 取下拉选中预设对应的模板；未知值回落到默认模板。
+/// 取下拉选中预设对应的模板；没选或未知值回落到默认模板。
 fn preset_template() -> String {
-    let name = host::setting_string(KEY_PRESET).unwrap_or_else(|| PRESETS[0].0.to_owned());
+    let name = host::setting_string(KEY_PRESET);
     PRESETS
         .iter()
-        .find(|(n, _)| *n == name)
+        .find(|(n, _)| name.as_deref() == Some(*n))
         .map_or_else(|| DEFAULT_TEMPLATE.to_owned(), |(_, t)| (*t).to_owned())
 }
 
@@ -218,11 +211,40 @@ mod tests {
     }
 
     #[test]
+    fn rows_with_control_chars_are_ignored() {
+        let bad_name = Agent {
+            name: "evil\nname".to_owned(),
+            command: "claude".to_owned(),
+            is_default: false,
+        };
+        assert!(bad_name.normalized().is_none());
+
+        let bad_command = Agent {
+            name: "Claude".to_owned(),
+            command: "claude\nrm -rf ~".to_owned(),
+            is_default: false,
+        };
+        assert!(bad_command.normalized().is_none());
+
+        // 正常行只做首尾空白裁剪
+        let ok = Agent {
+            name: " Claude ".to_owned(),
+            command: " claude ".to_owned(),
+            is_default: true,
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(ok.name, "Claude");
+        assert_eq!(ok.command, "claude");
+        assert!(ok.is_default);
+    }
+
+    #[test]
     fn settings_agents_default_matches_builtin() {
         // 设置页 JSON 的默认值与代码里的内置列表必须一致，避免改了代码忘了改 JSON。
         let json: serde_json::Value =
             serde_json::from_str(include_str!("../settings-agents.json")).unwrap();
-        let rows: Vec<Row> =
+        let rows: Vec<Agent> =
             serde_json::from_value(json["properties"]["agents"]["default"].clone()).unwrap();
         let expected = builtin_agents();
         assert_eq!(rows.len(), expected.len());

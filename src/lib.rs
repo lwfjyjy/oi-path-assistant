@@ -13,7 +13,7 @@ use openidea_plugin::{
 };
 
 use config::Agent;
-use template::{render, selection_lines};
+use template::{LineSel, render, selection_lines};
 
 /// storage 中记录「最近一次启动的终端 key」的键。
 const KEY_LAST_TERMINAL: &str = "lastTerminalKey";
@@ -37,18 +37,14 @@ const TERM_CMD_DONE: &str = r"printf '\033]133;D\033\\'; ";
 
 /// 插件本体（无状态：配置每次从 IDE 设置读取）。
 #[derive(Default)]
-pub struct QuickPath;
+pub struct PathAssistant;
 
-impl Plugin for QuickPath {
+impl Plugin for PathAssistant {
     /// 激活时订阅终端退出事件，并按上次留下的终端 key 恢复「可插入」上下文。
     fn activate(&mut self, _ctx: &Context) -> Result<(), Error> {
         // 订阅失败也不该阻止插件加载，故忽略错误。
         let _ = host::subscribe(EventKind::TerminalExited);
-        let has = host::storage::get(KEY_LAST_TERMINAL)
-            .ok()
-            .flatten()
-            .is_some();
-        let _ = host::set_context(CTX_HAS_TERMINAL, has);
+        let _ = host::set_context(CTX_HAS_TERMINAL, last_terminal().is_some());
         Ok(())
     }
 
@@ -73,15 +69,14 @@ impl Plugin for QuickPath {
             let Some(exited) = event.terminal_exited() else {
                 continue;
             };
-            let last = host::storage::get(KEY_LAST_TERMINAL).ok().flatten();
-            if last.as_deref() == Some(exited.key.as_str()) {
+            if last_terminal().as_deref() == Some(exited.key.as_str()) {
                 clear_last_terminal();
             }
         }
     }
 }
 
-impl QuickPath {
+impl PathAssistant {
     /// 拷贝：把当前文件 + 选区的引用写入剪贴板。
     ///
     /// `arg` 是右键菜单传来的目标路径（如在左侧文件树右键）：有它时以该文件为准，
@@ -196,26 +191,11 @@ impl QuickPath {
     /// 解析本次引用的目标：右键菜单带有目标路径 `arg` 时优先用它（左侧文件树等），
     /// 否则回退到「当前编辑器 + 选区」。
     fn resolve_ref(&self, ctx: &Invocation, arg: Option<&str>) -> Option<String> {
-        let Some(path) = arg.map(str::trim).filter(|p| !p.is_empty()) else {
-            return self.current_ref(ctx);
-        };
-        let Some(project) = ctx.project() else {
-            notify(
-                NotificationLevel::Warning,
-                "该文件不在任何项目中，无法计算相对路径。",
-            );
-            return None;
-        };
-        let Ok(root) = project.root() else {
-            notify(NotificationLevel::Warning, "无法读取项目根目录。");
-            return None;
-        };
-        // 右键菜单没有行选区，只拼纯路径。
-        self.check_text(render(
-            &config::template(),
-            &relative_path(&root, path),
-            None,
-        ))
+        match arg.map(str::trim).filter(|p| !p.is_empty()) {
+            // 右键菜单没有行选区，只拼纯路径。
+            Some(path) => self.ref_text(ctx, path, None),
+            None => self.current_ref(ctx),
+        }
     }
 
     /// 算出「当前文件 + 选区」拼成的引用串；失败时已给出提示，返回 `None`。
@@ -229,17 +209,6 @@ impl QuickPath {
             notify(NotificationLevel::Warning, "当前编辑器没有对应的文件。");
             return None;
         }
-        let Some(project) = ctx.project() else {
-            notify(
-                NotificationLevel::Warning,
-                "当前文件不在任何项目中，无法计算相对路径。",
-            );
-            return None;
-        };
-        let Ok(root) = project.root() else {
-            notify(NotificationLevel::Warning, "无法读取项目根目录。");
-            return None;
-        };
         let sel = editor
             .selections()
             .ok()
@@ -247,8 +216,30 @@ impl QuickPath {
             .and_then(|r| {
                 selection_lines(r.start.line, r.start.character, r.end.line, r.end.character)
             });
-        let text = render(&config::template(), &relative_path(&root, &path), sel);
-        self.check_text(text)
+        self.ref_text(ctx, &path, sel)
+    }
+
+    /// 把「项目内绝对路径 + 选区」渲染成引用串；项目根或相对路径缺失时提示并返回 `None`。
+    fn ref_text(&self, ctx: &Invocation, path: &str, sel: Option<LineSel>) -> Option<String> {
+        let Some(project) = ctx.project() else {
+            notify(
+                NotificationLevel::Warning,
+                "文件不在任何项目中，无法计算相对路径。",
+            );
+            return None;
+        };
+        let Ok(root) = project.root() else {
+            notify(NotificationLevel::Warning, "无法读取项目根目录。");
+            return None;
+        };
+        let Some(rel) = relative_path(&root, path) else {
+            notify(
+                NotificationLevel::Warning,
+                "无法计算相对路径（文件不在项目内，或就是项目根目录）。",
+            );
+            return None;
+        };
+        self.check_text(render(&config::template(), &rel, sel))
     }
 
     /// 终端输入必须只有一行：换行、Tab、CR 等控制字符都可能被终端当成「提交」或改变输入，
@@ -270,23 +261,22 @@ fn last_terminal() -> Option<String> {
         .filter(|k| !k.is_empty())
 }
 
-/// 把绝对路径算成「以 / 分隔、无 ./、无前导 /」的项目相对路径。
+/// 把绝对路径算成「以 / 分隔、无 ./、无前导 /」的项目相对路径；不在项目内返回 `None`。
 ///
 /// 这里用字符串而非 `std::path`：插件编译成 wasm，`Path` 会按 unix 语义解析，
 /// 在 Windows 的 `\` 路径上会失效；先把 `\` 统一成 `/` 即可跨平台正确。
-fn relative_path(root: &str, path: &str) -> String {
+fn relative_path(root: &str, path: &str) -> Option<String> {
     let root = root.replace('\\', "/");
     let root = root.trim_end_matches('/');
     let path = path.replace('\\', "/");
-    // 只有落在项目根「之下」（或正好等于根）才做相对化，避免 /proj 误配 /proj2。
-    let rel = path
-        .strip_prefix(root)
-        .filter(|r| r.is_empty() || r.starts_with('/'))
-        .unwrap_or(&path);
-    rel.split('/')
+    // 只认落在项目根「之下」的路径，避免 /proj 误配 /proj2；项目根自身没有可引用的相对路径。
+    let rel = path.strip_prefix(root).filter(|r| r.starts_with('/'))?;
+    let rel = rel
+        .split('/')
         .filter(|s| !s.is_empty() && *s != ".")
         .collect::<Vec<_>>()
-        .join("/")
+        .join("/");
+    (!rel.is_empty()).then_some(rel)
 }
 
 /// 终端关闭时清掉「最近终端」状态，并让插入按钮重新隐藏。
@@ -300,7 +290,7 @@ fn notify(level: NotificationLevel, body: &str) {
     host::notify(level, "oi-path-assistant", body);
 }
 
-register_plugin!(QuickPath);
+register_plugin!(PathAssistant);
 
 #[cfg(test)]
 mod tests {
@@ -318,7 +308,7 @@ mod tests {
     const VUE: &str = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9";
 
     /// 安装带全套权限的 MockHost，并把项目根设为 /proj。
-    fn host() -> MockHost {
+    fn mock() -> MockHost {
         let host = MockHost::install().with_capabilities(CAPS);
         host.set_project_root(Some("/proj"));
         host
@@ -335,36 +325,36 @@ mod tests {
 
     #[test]
     fn copy_path_single_line_to_clipboard() {
-        let host = host();
+        let host = mock();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.copy_path(&host.invocation(), None).unwrap();
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue#L5"));
         assert_eq!(host.notifications().len(), 1);
     }
 
     #[test]
     fn copy_path_many_lines() {
-        let host = host();
+        let host = mock();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
-        QuickPath.copy_path(&host.invocation(), None).unwrap();
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
         // 从第 5 行行首到第 9 行行首 = 5..8 行
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue#L5-L8"));
     }
 
     #[test]
     fn copy_path_no_selection_is_plain_path() {
-        let host = host();
+        let host = mock();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[]);
-        QuickPath.copy_path(&host.invocation(), None).unwrap();
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue"));
     }
 
     #[test]
     fn copy_path_from_project_view_uses_target_path() {
-        let host = host();
+        let host = mock();
         // 当前编辑器停在 A.vue，但在左侧文件树右键的是 B.vue：应以参数 B.vue 为准。
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath
+        PathAssistant
             .copy_path(&host.invocation(), Some("/proj/src/B.vue"))
             .unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/B.vue"));
@@ -372,11 +362,11 @@ mod tests {
 
     #[test]
     fn insert_path_from_project_view_uses_target_path() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.launch_default().unwrap();
-        QuickPath
+        PathAssistant.launch_default().unwrap();
+        PathAssistant
             .insert_path(&host.invocation(), Some("/proj/src/B.vue"))
             .unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/B.vue");
@@ -384,26 +374,40 @@ mod tests {
 
     #[test]
     fn copy_path_codex_preset() {
-        let host = host();
+        let host = mock();
         host.set_setting("templatePreset", &json!("Codex").to_string());
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 8, 0)]);
-        QuickPath.copy_path(&host.invocation(), None).unwrap();
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
         assert_eq!(host.clipboard().as_deref(), Some("@src/A.vue:5-8"));
     }
 
     #[test]
     fn copy_path_without_editor_notifies() {
-        let host = host();
-        QuickPath.copy_path(&host.invocation(), None).unwrap();
+        let host = mock();
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
         assert!(host.clipboard().is_none());
         assert_eq!(host.notifications().len(), 1);
     }
 
     #[test]
+    fn copy_path_outside_project_warns() {
+        let host = mock();
+        // 编辑器打开了项目之外的文件：不能退化成去掉前导 / 的假相对路径。
+        host.open_editor("/other/A.vue", "vue", VUE, &[]);
+        PathAssistant.copy_path(&host.invocation(), None).unwrap();
+        assert!(host.clipboard().is_none());
+        assert!(
+            host.notifications()
+                .iter()
+                .any(|n| n.level == NotificationLevel::Warning)
+        );
+    }
+
+    #[test]
     fn launch_single_agent_writes_command() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
-        QuickPath.launch_default().unwrap();
+        PathAssistant.launch_default().unwrap();
         let writes = host.terminal_writes();
         assert_eq!(writes.len(), 1);
         assert!(writes[0].1.ends_with("exec claude || exit\n"));
@@ -419,10 +423,10 @@ mod tests {
 
     #[test]
     fn launch_pick_selects_agent() {
-        let host = host();
+        let host = mock();
         // 默认六个 Agent，Codex 在下标 1；选择项 key 就是下标。
         host.answer_next_prompt(Some(&["1"]));
-        QuickPath.launch_pick().unwrap();
+        PathAssistant.launch_pick().unwrap();
         // 选中的是 Codex，验证敲进去的是 codex 命令
         assert!(
             host.terminal_writes()
@@ -435,7 +439,7 @@ mod tests {
 
     #[test]
     fn launch_default_uses_marked_agent() {
-        let host = host();
+        let host = mock();
         // 把「默认」勾在第二项 Codex 上，左键启动应直接跑 codex。
         host.set_setting(
             "agents",
@@ -445,7 +449,7 @@ mod tests {
             ])
             .to_string(),
         );
-        QuickPath.launch_default().unwrap();
+        PathAssistant.launch_default().unwrap();
         assert!(
             host.terminal_writes()
                 .last()
@@ -457,38 +461,38 @@ mod tests {
 
     #[test]
     fn launch_without_agents_notifies_and_starts_nothing() {
-        let host = host();
+        let host = mock();
         host.set_setting("agents", "[]");
-        QuickPath.launch_default().unwrap();
+        PathAssistant.launch_default().unwrap();
         assert!(host.terminal_writes().is_empty());
         assert_eq!(host.notifications().len(), 1);
     }
 
     #[test]
     fn insert_writes_terminal_and_skips_clipboard() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.launch_default().unwrap();
-        QuickPath.insert_path(&host.invocation(), None).unwrap();
+        PathAssistant.launch_default().unwrap();
+        PathAssistant.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5");
         assert!(host.clipboard().is_none());
     }
 
     #[test]
     fn insert_auto_enter_appends_newline() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
         host.set_setting("autoEnter", "true");
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.launch_default().unwrap();
-        QuickPath.insert_path(&host.invocation(), None).unwrap();
+        PathAssistant.launch_default().unwrap();
+        PathAssistant.insert_path(&host.invocation(), None).unwrap();
         assert_eq!(host.terminal_writes().last().unwrap().1, "@src/A.vue#L5\n");
     }
 
     #[test]
     fn insert_rejects_control_chars_in_path() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
         // 恶意文件名：内嵌换行可让终端把后半截当成独立命令提交（即使 autoEnter=false）。
         host.open_editor(
@@ -497,9 +501,9 @@ mod tests {
             VUE,
             &[],
         );
-        QuickPath.launch_default().unwrap();
+        PathAssistant.launch_default().unwrap();
         let before = host.terminal_writes().len();
-        QuickPath.insert_path(&host.invocation(), None).unwrap();
+        PathAssistant.insert_path(&host.invocation(), None).unwrap();
         // 不向终端写入任何内容，并给出可读提示
         assert_eq!(host.terminal_writes().len(), before);
         assert!(
@@ -513,7 +517,7 @@ mod tests {
     /// 也不应被任何 shell 自动执行（旧实现会让残留的 zsh 提示符执行 `$(...)`）。
     #[test]
     fn insert_after_agent_exit_does_not_reach_shell() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
         host.set_setting("autoEnter", "true");
         host.open_editor(
@@ -522,7 +526,7 @@ mod tests {
             VUE,
             &[],
         );
-        let mut plugin = QuickPath;
+        let mut plugin = PathAssistant;
         plugin.launch_default().unwrap();
         // Agent 退出 = 终端关闭（因为启动时用 exec 替换了 shell）
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
@@ -541,9 +545,9 @@ mod tests {
 
     #[test]
     fn insert_without_terminal_notifies() {
-        let host = host();
+        let host = mock();
         host.open_editor("/proj/src/A.vue", "vue", VUE, &[(4, 0, 4, 3)]);
-        QuickPath.insert_path(&host.invocation(), None).unwrap();
+        PathAssistant.insert_path(&host.invocation(), None).unwrap();
         assert!(host.terminal_writes().is_empty());
         assert!(
             host.notifications()
@@ -554,9 +558,9 @@ mod tests {
 
     #[test]
     fn terminal_exit_hides_insert_context() {
-        let host = host();
+        let host = mock();
         single_agent(&host);
-        let mut plugin = QuickPath;
+        let mut plugin = PathAssistant;
         plugin.launch_default().unwrap();
         let key = host.storage().get(KEY_LAST_TERMINAL).unwrap().clone();
         let event = host.finish_terminal(&key).unwrap();
@@ -570,17 +574,28 @@ mod tests {
 
     #[test]
     fn relative_path_normalizes_separators() {
-        assert_eq!(relative_path("/proj", "/proj/src/A.vue"), "src/A.vue");
+        assert_eq!(
+            relative_path("/proj", "/proj/src/A.vue").as_deref(),
+            Some("src/A.vue")
+        );
         // 根带尾斜杠也能正确相对化
-        assert_eq!(relative_path("/proj/", "/proj/src/A.vue"), "src/A.vue");
+        assert_eq!(
+            relative_path("/proj/", "/proj/src/A.vue").as_deref(),
+            Some("src/A.vue")
+        );
         // 相同前缀但不是子目录，不能误配
-        assert_eq!(relative_path("/proj", "/proj2/x"), "proj2/x");
+        assert_eq!(relative_path("/proj", "/proj2/x"), None);
+        // 项目根自身没有可引用的相对路径
+        assert_eq!(relative_path("/proj", "/proj"), None);
         // Windows 风格反斜杠
         assert_eq!(
-            relative_path(r"C:\proj", r"C:\proj\src\A.java"),
-            "src/A.java"
+            relative_path(r"C:\proj", r"C:\proj\src\A.java").as_deref(),
+            Some("src/A.java")
         );
         // 折叠 ./ 与多余分隔符
-        assert_eq!(relative_path("/proj", "/proj/./a//b.rs"), "a/b.rs");
+        assert_eq!(
+            relative_path("/proj", "/proj/./a//b.rs").as_deref(),
+            Some("a/b.rs")
+        );
     }
 }

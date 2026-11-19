@@ -46,7 +46,10 @@ pub fn selection_lines(
     })
 }
 
-/// 渲染模板：先处理条件段，再替换占位符。
+/// 渲染模板：先替换行号，最后替换路径。
+///
+/// 路径必须最后替换：文件名本身可能含 `{start}`、`{end}` 这样的字面量，
+/// 若先插入路径再替换行号，路径内容就会被二次改写。
 #[must_use]
 pub fn render(template: &str, path: &str, sel: Option<LineSel>) -> String {
     let body = expand(template, sel);
@@ -54,9 +57,9 @@ pub fn render(template: &str, path: &str, sel: Option<LineSel>) -> String {
         Some(s) => (s.start.to_string(), s.end.to_string()),
         None => (String::new(), String::new()),
     };
-    body.replace("{path}", path)
-        .replace("{start}", &start)
+    body.replace("{start}", &start)
         .replace("{end}", &end)
+        .replace("{path}", path)
 }
 
 /// 处理 `[ONE: ...]` / `[MANY: ...]` 条件段；非条件方括号原样保留。
@@ -146,5 +149,16 @@ mod tests {
         assert_eq!(render("", "src/A.vue", None), "");
         // 未知方括号段原样保留
         assert_eq!(render("a[b]c{path}", "p", None), "a[b]cp");
+    }
+
+    #[test]
+    fn path_placeholders_are_not_replaced_again() {
+        // 文件名里含 {start}/{end} 字面量时，不能被当成模板占位符二次替换
+        let sel = Some(LineSel { start: 5, end: 5 });
+        assert_eq!(
+            render(CLAUDE, "src/a{start}b{end}.rs", sel),
+            "@src/a{start}b{end}.rs#L5"
+        );
+        assert_eq!(render("{path}", "a{path}b", None), "a{path}b");
     }
 }
