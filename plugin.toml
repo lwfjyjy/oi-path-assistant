@@ -1,6 +1,6 @@
 id = "lwf.oi-path-assistant"
 name = "oi-path-assistant"
-version = "0.1.5"
+version = "0.1.6"
 description = "把当前文件与选中行拼成 AI agent 可识别的路径引用，一键拷贝或插入终端。"
 authors = ["lwf"]
 license = "MIT"
@@ -45,6 +45,13 @@ id = "insert-path"
 title = "插入路径"
 category = "oi-path-assistant"
 icon = "icons/insert.svg"
+
+# 「拷贝路径」的默认快捷键：Windows/Linux 用 Ctrl+Shift+Alt+P，macOS 用 Cmd+Shift+Option+P。
+# 这只是默认值，用户可在「设置 › 按键映射」自行改键；若与 IDE 已有键冲突会被忽略。
+[[contributes.keymaps]]
+command = "copy-path"
+key = "Ctrl+Shift+Alt+P"
+mac = "Meta+Shift+Alt+P"
 
 [[contributes.menus]]
 menu = "mainToolbar"

@@ -11,6 +11,7 @@
 - **原生设置页管理 Agent**（设置 › oi-path-assistant）：分「Agent 列表」和「路径模板」两页；Agent 表格可增删、排序、编辑名称与启动命令，并用「默认」列勾选左键直接启动的那个，内置 6 个常见 Agent。
 - **插入路径**不经过剪贴板，直接写进「最近一次启动」的 Agent 终端；默认不自动回车，可在设置里开启。
 - 未启动过 Agent 终端时，自动隐藏「插入路径」按钮（通过 `when` 上下文控制）。
+- **快捷键**：打开文件后按 `Ctrl+Shift+Alt+P`（macOS `Cmd+Shift+Option+P`）快速拷贝当前文件路径（含选中行号）。键位可在「设置 › 按键映射」里改；文件树里请用右键菜单（快捷键只能识别已打开的文件）。
 
 ## 使用
 
@@ -101,7 +102,7 @@ openidea-plugin build .
 
 ```
 oi-path-assistant/
-├─ plugin.toml            # 插件清单（命令 / 菜单 / 设置页 / 权限）
+├─ plugin.toml            # 插件清单（命令 / 快捷键 / 菜单 / 设置页 / 权限）
 ├─ settings-agents.json   # 设置页「Agent 列表」的结构与默认值
 ├─ settings-template.json # 设置页「路径模板」的结构与默认值
 ├─ icons/                 # 4 个命令图标（启动 / 拷贝 / 插入 / 选择）

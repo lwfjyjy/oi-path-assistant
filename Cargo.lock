@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "openidea-plugin-lwf-oi-path-assistant"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "openidea-plugin",
  "serde",

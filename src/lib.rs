@@ -217,7 +217,11 @@ impl PathAssistant {
     /// 算出「当前文件 + 选区」拼成的引用串；失败时已给出提示，返回 `None`。
     fn current_ref(&self, ctx: &Invocation) -> Option<String> {
         let Some(editor) = ctx.editor() else {
-            notify(NotificationLevel::Warning, "请先打开一个文件。");
+            // 快捷键/命令触发时只能拿到「当前打开的文件」；文件树里选中的文件需走右键菜单。
+            notify(
+                NotificationLevel::Warning,
+                "请先打开一个文件再拷贝（文件树里请右键 →「拷贝路径」）。",
+            );
             return None;
         };
         let path = editor.path();
